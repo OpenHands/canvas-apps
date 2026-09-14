@@ -61,6 +61,9 @@ describe("sidecar provisioning", () => {
     expect(installation).toContain("app_dir='.openhands/apps/backend-terminal'");
     expect(installation).toContain("npm ci --omit=dev --no-audit --no-fund");
     expect(installation).toContain("Bundled sidecar file checksum mismatch");
+    expect(installation).toContain('base64 --decode < "$source"');
+    expect(installation).toContain('base64 -D < "$source"');
+    expect(installation).not.toMatch(/base64 (?:--decode|-D) "\$source"/);
     expect(installation).not.toContain("id -u");
     expect(installation.indexOf("npm ci --omit=dev")).toBeLessThan(installation.indexOf(".runtime-version.tmp"));
 
@@ -89,7 +92,7 @@ describe("sidecar provisioning", () => {
   it("embeds only checksummed runtime files and matching versions", () => {
     expect(artifact.schemaVersion).toBe(1);
     expect(artifact.app).toBe("backend-terminal");
-    expect(artifact.version).toBe("0.3.1");
+    expect(artifact.version).toBe("0.3.2");
     expect(artifact.files.map((file) => file.path)).toEqual(expect.arrayContaining([
       "package.json",
       "package-lock.json",

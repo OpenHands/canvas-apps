@@ -9,7 +9,7 @@ import { loadConfig, type SidecarConfig } from "./config.js";
 import { validateAgentServerKey } from "./agent-server-auth.js";
 import { CapabilityStore } from "./tokens.js";
 
-export const SIDECAR_VERSION = "0.3.1";
+export const SIDECAR_VERSION = "0.3.2";
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 const SHELL_ENV_KEYS = ["HOME", "USER", "LOGNAME", "PATH", "SHELL", "LANG", "LC_ALL", "TMPDIR"] as const;
 

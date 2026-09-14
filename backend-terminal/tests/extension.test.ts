@@ -16,7 +16,7 @@ type Harness = {
 function encodedProbe(state: "missing" | "stopped" | "ready" | "incompatible", overrides: Record<string, unknown> = {}): string {
   return `BACKEND_TERMINAL_PROBE\t${btoa(JSON.stringify({
     state,
-    version: state === "ready" ? "0.3.1" : null,
+    version: state === "ready" ? "0.3.2" : null,
     nodeVersion: "v23.8.0",
     npmVersion: "10.9.2",
     supported: true,
@@ -34,7 +34,7 @@ function createHarness(requestImpl?: Request, kind: "local" | "cloud" = "local")
   }));
   const host: Host = {
     apiVersion: "1",
-    extension: { name: "backend-terminal", version: "0.3.1", resolvedRef: "test" },
+    extension: { name: "backend-terminal", version: "0.3.2", resolvedRef: "test" },
     backend: { id: `${kind}-test`, kind, orgId: kind === "cloud" ? "org-1" : null },
     agentServer: { request: request as Host["agentServer"]["request"] },
     registerPage(id, mount) {

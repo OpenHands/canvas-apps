@@ -39,12 +39,12 @@ try {
       const module = await import(blobUrl);
       const host = {
         apiVersion: "1",
-        extension: { name: "backend-terminal", version: "0.3.1", resolvedRef: "smoke" },
+        extension: { name: "backend-terminal", version: "0.3.2", resolvedRef: "smoke" },
         backend: { id: "smoke-backend", kind: "local", orgId: null },
         agentServer: {
           async request(request) {
             if (request.path === "/api/file/home") return { home: "/root" };
-            const probe = { state: "ready", version: "0.3.1", nodeVersion: "v22.0.0", npmVersion: "10.0.0", supported: true, message: null };
+            const probe = { state: "ready", version: "0.3.2", nodeVersion: "v22.0.0", npmVersion: "10.0.0", supported: true, message: null };
             return { exit_code: 0, stdout: `BACKEND_TERMINAL_PROBE\t${btoa(JSON.stringify(probe))}\n`, stderr: "" };
           },
         },

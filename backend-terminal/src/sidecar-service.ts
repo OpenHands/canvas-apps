@@ -193,8 +193,8 @@ function installCommands(): string[] {
 app_dir='${APP_SUBPATH}'
 decode_file() {
   source="$1"; destination="$2"; rm -f "$destination.tmp"
-  if base64 --decode "$source" > "$destination.tmp" 2>/dev/null; then :
-  else base64 -D "$source" > "$destination.tmp"; fi
+  if base64 --decode < "$source" > "$destination.tmp" 2>/dev/null; then :
+  else base64 -D < "$source" > "$destination.tmp"; fi
   chmod 600 "$destination.tmp"; mv "$destination.tmp" "$destination"; rm -f "$source"
 }
 sha_file() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
