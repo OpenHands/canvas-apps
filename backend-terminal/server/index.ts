@@ -9,6 +9,7 @@ import { loadConfig, type SidecarConfig } from "./config.js";
 import { validateAgentServerKey } from "./agent-server-auth.js";
 import { CapabilityStore } from "./tokens.js";
 
+export const SIDECAR_VERSION = "0.3.0";
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 const SHELL_ENV_KEYS = ["HOME", "USER", "LOGNAME", "PATH", "SHELL", "LANG", "LC_ALL", "TMPDIR"] as const;
 
@@ -93,7 +94,7 @@ export async function startSidecar(config = loadConfig()): Promise<RunningSideca
 
   app.get("/api/health", (_, response) => {
     response.setHeader("Cache-Control", "no-store");
-    response.json({ status: "ok", sessions: sessions.size, max_sessions: config.maxSessions });
+    response.json({ status: "ok", version: SIDECAR_VERSION, sessions: sessions.size, max_sessions: config.maxSessions });
   });
 
   app.post("/api/access-token", (request, response) => {

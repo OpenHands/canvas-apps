@@ -39,8 +39,15 @@ try {
       const module = await import(blobUrl);
       const host = {
         apiVersion: "1",
-        extension: { name: "backend-terminal", version: "0.2.0", resolvedRef: "smoke" },
+        extension: { name: "backend-terminal", version: "0.3.0", resolvedRef: "smoke" },
         backend: { id: "smoke-backend", kind: "local", orgId: null },
+        agentServer: {
+          async request(request) {
+            if (request.path === "/api/file/home") return { home: "/root" };
+            const probe = { state: "ready", version: "0.3.0", nodeVersion: "v22.0.0", npmVersion: "10.0.0", root: true, supported: true, message: null };
+            return { exit_code: 0, stdout: `BACKEND_TERMINAL_PROBE\t${btoa(JSON.stringify(probe))}\n`, stderr: "" };
+          },
+        },
         registerPage(id, mount) {
           if (id !== "terminal") throw new Error(`Unexpected page ID: ${id}`);
           mountPage = mount;
@@ -52,6 +59,10 @@ try {
       if (typeof mountPage !== "function") throw new Error("Page was not registered.");
       const container = document.querySelector("#app");
       const disposeMount = mountPage({ container, path: "" });
+      const iframeDeadline = Date.now() + 2_000;
+      while (!container.querySelector("iframe") && Date.now() < iframeDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
       const iframe = container.querySelector("iframe");
       const iframeUrl = new URL(iframe?.src ?? "about:blank");
       if (`${iframeUrl.origin}${iframeUrl.pathname}` !== "http://canvas.test/terminal-sidecar/") {
@@ -75,6 +86,10 @@ try {
       if (!unregistered) throw new Error("Activation cleanup did not unregister the page.");
 
       const disposeNested = mountPage({ container, path: "anything" });
+      const nestedDeadline = Date.now() + 2_000;
+      while (!container.querySelector("iframe") && Date.now() < nestedDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
       if (!container.querySelector("iframe") || container.querySelector("header, form, input, button, footer")) {
         throw new Error("Nested page path did not render only the terminal.");
       }

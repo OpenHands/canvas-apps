@@ -1,19 +1,21 @@
 {
   "name": "canvas-app-terminal",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build:extension": "vite build && node scripts/sync-extension.mjs",
     "build:spa": "vite build --config spa/vite.config.ts",
     "build:server": "tsc -p tsconfig.sidecar.json",
-    "build": "npm run build:extension && npm run build:spa && npm run build:server",
+    "build:sidecar": "npm run build:spa && npm run build:server && node scripts/sync-sidecar-artifact.mjs",
+    "build": "npm run build:sidecar && npm run build:extension",
     "start": "node sidecar-dist/server/index.js",
     "typecheck": "tsc --noEmit && tsc -p spa/tsconfig.json --noEmit && tsc -p tsconfig.sidecar.json --noEmit",
     "test": "vitest run",
     "validate": "node scripts/check-extension.mjs",
     "smoke:extension": "node scripts/blob-smoke.mjs",
     "smoke:sidecar": "node scripts/sidecar-browser-smoke.mjs",
+    "smoke:install": "RUN_INSTALL_SMOKE=true vitest run tests/integration/install.test.ts",
     "smoke": "npm run smoke:extension && npm run smoke:sidecar",
     "check": "npm run typecheck && npm run test && npm run build && npm run validate && npm run smoke"
   },

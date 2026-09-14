@@ -1,0 +1,14 @@
+{
+  "name": "backend-terminal-sidecar",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "5.2.1",
+    "node-pty": "1.1.0",
+    "ws": "8.21.3"
+  }
+}

@@ -1,6 +1,6 @@
 # Backend Terminal
 
-Backend Terminal is an **App for Agent Canvas** with a sidecar-served SPA and a real PTY shell on the sidecar host. The checked-in Canvas `extension.js` embeds the SPA; the sidecar serves the frontend and carries terminal input, output, resize, and lifecycle events over WebSocket.
+Backend Terminal is an **App for Agent Canvas** with a sidecar-served SPA and a real PTY shell on the sidecar host. The checked-in Canvas `extension.js` embeds a checksummed sidecar artifact and onboarding UI; the installed sidecar serves the terminal frontend and carries input, output, resize, and lifecycle events over WebSocket.
 
 ## Architecture
 
@@ -22,13 +22,29 @@ npx playwright install chromium
 npm run check
 ```
 
+To exercise a clean install, pinned npm dependency installation, daemon startup, versioned health, and cleanup in a temporary backend home:
+
+```sh
+npm run smoke:install
+```
+
+
 The build emits:
 
 - `extension.js`: self-contained Canvas entrypoint, copied from `dist/extension.js`.
 - `sidecar-dist/public/`: Vite SPA with xterm.js.
 - `sidecar-dist/server/`: Node HTTP, WebSocket, and PTY backend.
 
-`npm run check` performs strict type checking, 18 unit/integration tests including localStorage selection, root enforcement, live key validation, and a real PTY session, all builds, Canvas static validation, and two Chromium smoke tests.
+`npm run check` performs strict type checking, 27 unit/integration tests including first-run UI provisioning, localStorage selection, root enforcement, live key validation, and a real PTY session, all builds, Canvas static validation, and two Chromium smoke tests. The additional networked clean-install integration test is opt-in through `npm run smoke:install`.
+
+
+## First-run local provisioning
+
+Opening the App first performs a read-only probe through the active local backend's authenticated Agent Server. A healthy matching sidecar opens directly into the terminal. A missing or incompatible runtime shows a setup view instead of loading a failing iframe.
+
+After explicit confirmation, **Install and start** safely stops a prior PID-file-owned App sidecar, writes the bundled, per-file SHA-256-verified runtime to `<backend-home>/.openhands/apps/backend-terminal`, runs `npm ci --omit=dev` against the pinned production lockfile, and launches a root process bound to `127.0.0.1:18080`. A compatible stopped runtime presents a separate **Start sidecar** action and does not reinstall. The App waits for versioned health before loading the terminal iframe.
+
+Provisioning requires a local backend whose Agent Server itself runs as root, Python 3 for the read-only probe, Node.js 18+, npm, and the native build prerequisites needed by `node-pty` on Linux. Installing or enabling the Canvas App never mutates the backend by itself; only the explicit setup button does. App removal, sidecar stopping, runtime deletion, and log deletion remain separate operator actions. Logs and PID state live under the runtime directory.
 
 ## Run the sidecar
 

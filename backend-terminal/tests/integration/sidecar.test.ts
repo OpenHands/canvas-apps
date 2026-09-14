@@ -72,7 +72,7 @@ describe("PTY sidecar", () => {
 
   it("reports health and rejects cross-origin token issuance", async () => {
     const health = await fetch(`${baseUrl}/api/health`).then((response) => response.json());
-    expect(health).toEqual({ status: "ok", sessions: 0, max_sessions: 2 });
+    expect(health).toEqual({ status: "ok", version: "0.3.0", sessions: 0, max_sessions: 2 });
 
     const denied = await issueCapability("http://evil.example", "cross-site");
     expect(denied.status).toBe(403);

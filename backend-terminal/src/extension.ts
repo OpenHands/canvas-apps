@@ -1,24 +1,6 @@
+import { artifact, discoverHome, installSidecar, probeSidecar, runtimeDirectory, startSidecar, type SidecarProbe } from "./sidecar-service";
 import styles from "./styles.css?inline";
-
-type PageContext = {
-  container: HTMLElement;
-  path: string;
-};
-
-type CanvasHost = {
-  readonly apiVersion: string;
-  readonly extension: Readonly<{
-    name: string;
-    version: string;
-    resolvedRef: string | null;
-  }>;
-  readonly backend: Readonly<{
-    id: string;
-    kind: "local" | "cloud";
-    orgId: string | null;
-  }>;
-  registerPage(id: string, mount: (context: PageContext) => void | (() => void)): () => void;
-};
+import type { CanvasHost, PageContext } from "./types";
 
 function defaultSidecarUrl(): string {
   if (location.protocol === "http:" && location.hostname === "localhost") return "http://localhost:18080";
@@ -133,14 +115,179 @@ function mountTerminal(container: HTMLElement): () => void {
   };
 }
 
-function mountPage(context: PageContext): () => void {
+function mountMessage(container: HTMLElement, message: string, tone: "status" | "error"): () => void {
+  const root = element("section", `terminal-shell__message terminal-shell__message--${tone}`, message);
+  root.setAttribute("role", tone === "error" ? "alert" : "status");
+  container.append(root);
+  return () => root.remove();
+}
+
+function mountSetup(
+  host: CanvasHost,
+  container: HTMLElement,
+  home: string,
+  probe: SidecarProbe,
+  onReady: () => void,
+): () => void {
+  let disposed = false;
+  let busy = false;
+  const needsInstall = probe.state !== "stopped";
+  const root = element("section", "terminal-setup");
+  root.setAttribute("aria-labelledby", "terminal-setup-title");
+  const title = element("h1", "terminal-setup__title", needsInstall ? "Install terminal sidecar" : "Start terminal sidecar");
+  title.id = "terminal-setup-title";
+  const summary = element(
+    "p",
+    "terminal-setup__summary",
+    needsInstall
+      ? "The backend-local terminal service is not installed and running."
+      : "The verified terminal service is installed but stopped.",
+  );
+  const details = element("dl", "terminal-setup__details");
+  const detailValues = [
+    ["Version", artifact.version],
+    ["Install path", runtimeDirectory(home)],
+    ["Listener", "127.0.0.1:18080"],
+    ["Runtime", "Persistent root process; PTYs run with full machine authority"],
+  ];
+  for (const [label, value] of detailValues) {
+    const row = element("div");
+    row.append(element("dt", undefined, label), element("dd", undefined, value));
+    details.append(row);
+  }
+  const disclosure = element(
+    "p",
+    "terminal-setup__disclosure",
+    needsInstall
+      ? `Installation stops any prior App-managed sidecar, writes bundled SHA-256-verified files, downloads pinned npm packages from the official registry, builds node-pty locally when required, and starts the service as root. Artifact ${artifact.sha256.slice(0, 12)}…`
+      : "Starting launches the already verified service as root. It validates the active Canvas backend key live before creating each PTY.",
+  );
+  const error = element("div", "terminal-setup__error");
+  error.hidden = !probe.message;
+  error.textContent = probe.message ?? "";
+  error.setAttribute("role", "alert");
+  const actions = element("div", "terminal-setup__actions");
+  const primary = element("button", "terminal-setup__button terminal-setup__button--primary", needsInstall ? "Install and start" : "Start sidecar") as HTMLButtonElement;
+  primary.type = "button";
+  const recheck = element("button", "terminal-setup__button", "Recheck") as HTMLButtonElement;
+  recheck.type = "button";
+  let consent: HTMLInputElement | null = null;
+  if (needsInstall) {
+    const consentLabel = element("label", "terminal-setup__consent");
+    consent = element("input") as HTMLInputElement;
+    consent.type = "checkbox";
+    consentLabel.append(consent, document.createTextNode(" I understand this installs and starts a root-level terminal service on the backend machine."));
+    root.append(title, summary, details, disclosure, consentLabel, error, actions);
+  } else {
+    root.append(title, summary, details, disclosure, error, actions);
+  }
+  actions.append(primary, recheck);
+  container.append(root);
+
+  function setBusy(value: boolean, label?: string): void {
+    busy = value;
+    primary.disabled = value || !probe.supported || !probe.root || Boolean(consent && !consent.checked);
+    recheck.disabled = value;
+    if (label) primary.textContent = label;
+  }
+
+  function showError(value: string): void {
+    error.textContent = value;
+    error.hidden = value.length === 0;
+  }
+
+  async function check(): Promise<void> {
+    if (busy) return;
+    setBusy(true);
+    showError("");
+    try {
+      const current = await probeSidecar(host, home);
+      if (disposed) return;
+      if (current.state === "ready") onReady();
+      else showError(current.message ?? (current.state === "stopped" ? "The sidecar is installed but stopped. Use Start sidecar." : "The sidecar still requires installation."));
+    } catch (caught) {
+      if (!disposed) showError(caught instanceof Error ? caught.message : "Sidecar probe failed.");
+    } finally {
+      if (!disposed) setBusy(false);
+    }
+  }
+
+  async function installOrStart(): Promise<void> {
+    if (busy || primary.disabled) return;
+    setBusy(true, needsInstall ? "Installing…" : "Starting…");
+    showError("");
+    try {
+      if (needsInstall) await installSidecar(host, home);
+      if (disposed) return;
+      setBusy(true, "Starting…");
+      await startSidecar(host, home, location.origin);
+      if (disposed) return;
+      const current = await probeSidecar(host, home);
+      if (current.state !== "ready") throw new Error(current.message ?? "The sidecar did not become ready.");
+      onReady();
+    } catch (caught) {
+      if (!disposed) {
+        showError(caught instanceof Error ? caught.message : "Sidecar setup failed.");
+        setBusy(false, needsInstall ? "Install and start" : "Start sidecar");
+      }
+    }
+  }
+
+  consent?.addEventListener("change", () => setBusy(false));
+  primary.addEventListener("click", () => void installOrStart());
+  recheck.addEventListener("click", () => void check());
+  setBusy(false);
+  if (!probe.root) showError("The Agent Server must run as root to install and run this terminal.");
+  else if (!probe.supported) showError(`Node.js 18+ and npm are required on a supported Linux or macOS backend. Detected: ${probe.nodeVersion ?? "no Node.js"}.`);
+
+  return () => {
+    disposed = true;
+    root.remove();
+  };
+}
+
+
+function mountPage(host: CanvasHost, context: PageContext): () => void {
+  let disposed = false;
+  let disposeContent = mountMessage(context.container, "Checking terminal sidecar…", "status");
   const style = element("style");
   style.dataset.backendTerminal = "styles";
   style.textContent = styles;
-  context.container.append(style);
+  context.container.prepend(style);
 
-  const disposeContent = mountTerminal(context.container);
+  function replaceContent(mount: () => () => void): void {
+    if (disposed) return;
+    disposeContent();
+    disposeContent = mount();
+  }
+
+  async function initialize(): Promise<void> {
+    if (host.backend.kind !== "local") {
+      replaceContent(() => mountMessage(context.container, "Backend Terminal requires an active local backend.", "error"));
+      return;
+    }
+    try {
+      const home = await discoverHome(host);
+      const probe = await probeSidecar(host, home);
+      if (disposed) return;
+      if (probe.state === "ready") {
+        replaceContent(() => mountTerminal(context.container));
+      } else {
+        replaceContent(() => mountSetup(host, context.container, home, probe, () => {
+          replaceContent(() => mountTerminal(context.container));
+        }));
+      }
+    } catch (caught) {
+      if (!disposed) {
+        const message = caught instanceof Error ? caught.message : "Unable to inspect the terminal sidecar.";
+        replaceContent(() => mountMessage(context.container, message, "error"));
+      }
+    }
+  }
+
+  void initialize();
   return () => {
+    disposed = true;
     disposeContent();
     style.remove();
   };
@@ -148,5 +295,5 @@ function mountPage(context: PageContext): () => void {
 
 export function activate(host: CanvasHost): () => void {
   if (host.apiVersion !== "1") throw new Error("Backend Terminal requires Canvas host API 1.");
-  return host.registerPage("terminal", mountPage);
+  return host.registerPage("terminal", (context) => mountPage(host, context));
 }

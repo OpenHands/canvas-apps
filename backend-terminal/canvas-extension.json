@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "backend-terminal",
   "display_name": "Backend Terminal",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Open an interactive PTY terminal served by a backend-local sidecar.",
   "entrypoint": "extension.js",
   "contributes": {
