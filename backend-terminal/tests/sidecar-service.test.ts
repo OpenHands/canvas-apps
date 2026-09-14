@@ -37,10 +37,10 @@ describe("sidecar provisioning", () => {
   it("parses a complete non-mutating probe", async () => {
     const request = vi.fn(async () => ({
       exit_code: 0,
-      stdout: probeOutput({ state: "missing", version: null, nodeVersion: "v22.0.0", npmVersion: "10.0.0", root: true, supported: true, message: null }),
+      stdout: probeOutput({ state: "missing", version: null, nodeVersion: "v22.0.0", npmVersion: "10.0.0", supported: true, message: null }),
       stderr: "",
     }));
-    await expect(probeSidecar(hostWith(request), "/root")).resolves.toMatchObject({ state: "missing", root: true, supported: true });
+    await expect(probeSidecar(hostWith(request), "/root")).resolves.toMatchObject({ state: "missing", supported: true });
     expect(request).toHaveBeenCalledWith({ method: "POST", path: "/api/bash/execute_bash_command", body: { command: PROBE_COMMAND, cwd: "/root", timeout: 20 } });
     expect(PROBE_COMMAND).not.toMatch(/mkdir|unlink|rmtree|npm ci|nohup/);
   });
@@ -61,13 +61,15 @@ describe("sidecar provisioning", () => {
     expect(installation).toContain("app_dir='.openhands/apps/backend-terminal'");
     expect(installation).toContain("npm ci --omit=dev --no-audit --no-fund");
     expect(installation).toContain("Bundled sidecar file checksum mismatch");
-    expect(installation).toContain("Backend Terminal requires a root Agent Server process");
+    expect(installation).not.toContain("id -u");
     expect(installation.indexOf("npm ci --omit=dev")).toBeLessThan(installation.indexOf(".runtime-version.tmp"));
 
     expect(START_COMMAND).toContain("127.0.0.1:18080");
     expect(START_COMMAND).toContain("nohup env HOME=");
     expect(START_COMMAND).toContain("TERMINAL_CWD=\"$home\"");
     expect(START_COMMAND).toContain("Bundled sidecar file checksum mismatch");
+    expect(START_COMMAND).not.toMatch(/\b(?:USER|LOGNAME)='root'/);
+    expect(START_COMMAND).not.toContain("id -u");
     expect(installation).not.toContain("/root");
   });
 
@@ -87,7 +89,7 @@ describe("sidecar provisioning", () => {
   it("embeds only checksummed runtime files and matching versions", () => {
     expect(artifact.schemaVersion).toBe(1);
     expect(artifact.app).toBe("backend-terminal");
-    expect(artifact.version).toBe("0.3.0");
+    expect(artifact.version).toBe("0.3.1");
     expect(artifact.files.map((file) => file.path)).toEqual(expect.arrayContaining([
       "package.json",
       "package-lock.json",

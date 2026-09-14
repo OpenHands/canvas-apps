@@ -32,7 +32,6 @@ export interface SidecarProbe {
   version: string | null;
   nodeVersion: string | null;
   npmVersion: string | null;
-  root: boolean;
   supported: boolean;
   message: string | null;
 }
@@ -106,7 +105,7 @@ export function runtimeDirectory(home: string): string {
 }
 
 export const PROBE_COMMAND = String.raw`python3 - <<'PY'
-exec("import base64, hashlib, json, os, platform, re, shutil, subprocess, urllib.request")
+exec("import base64, hashlib, json, platform, re, shutil, subprocess, urllib.request")
 from pathlib import Path
 home = Path.cwd().resolve()
 app = home / "${APP_SUBPATH}"
@@ -152,14 +151,13 @@ elif app.exists():
     state, message = "incompatible", "The installed sidecar is incomplete or does not match this App version."
 else:
     state, message = "missing", None
-result = {"state": state, "version": health.get("version") if isinstance(health, dict) else None, "nodeVersion": node_version, "npmVersion": npm_version, "root": hasattr(os, "geteuid") and os.geteuid() == 0, "supported": supported, "message": message}
+result = {"state": state, "version": health.get("version") if isinstance(health, dict) else None, "nodeVersion": node_version, "npmVersion": npm_version, "supported": supported, "message": message}
 print("BACKEND_TERMINAL_PROBE\t" + base64.b64encode(json.dumps(result, separators=(",", ":")).encode()).decode())
 PY`;
 
 const INSTALL_PREPARE_COMMAND = String.raw`set -eu
 app_dir='${APP_SUBPATH}'
 for checked in '.openhands' '.openhands/apps' "$app_dir" "$app_dir/server" "$app_dir/public" "$app_dir/public/assets" "$app_dir/run" "$app_dir/logs" "$app_dir/node_modules"; do [ ! -L "$checked" ] || { printf 'Sidecar path contains a symbolic link\n' >&2; exit 1; }; done
-[ "$(id -u)" = '0' ] || { printf 'Backend Terminal requires a root Agent Server process\n' >&2; exit 1; }
 command -v node >/dev/null 2>&1 || { printf 'Node.js 18 or newer is required\n' >&2; exit 1; }
 node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 18 ? 0 : 1)' || { printf 'Node.js 18 or newer is required\n' >&2; exit 1; }
 command -v npm >/dev/null 2>&1 || { printf 'npm is required\n' >&2; exit 1; }
@@ -238,7 +236,6 @@ function startCommand(activeCanvasOrigin: string): string {
 app_dir='${APP_SUBPATH}'
 pid_file="$app_dir/run/sidecar.pid"
 for checked in '.openhands' '.openhands/apps' "$app_dir" "$app_dir/run" "$pid_file"; do [ ! -L "$checked" ] || { printf 'Sidecar path contains a symbolic link\n' >&2; exit 1; }; done
-[ "$(id -u)" = '0' ] || { printf 'Backend Terminal requires a root Agent Server process\n' >&2; exit 1; }
 [ "$(cat "$app_dir/.runtime-version" 2>/dev/null)" = '${artifact.version}' ] || { printf 'Sidecar version mismatch; reinstall it\n' >&2; exit 1; }
 [ "$(cat "$app_dir/.artifact-sha256" 2>/dev/null)" = '${artifact.sha256}' ] || { printf 'Sidecar artifact mismatch; reinstall it\n' >&2; exit 1; }
 sha_file() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
@@ -250,7 +247,7 @@ if [ -f "$pid_file" ]; then
   rm -f "$pid_file"
 fi
 home=$(pwd -P)
-nohup env HOME="$home" USER='root' LOGNAME='root' TERMINAL_CWD="$home" TERMINAL_ALLOWED_ORIGINS=${shellSingleQuoted(allowedOrigins)} TERMINAL_AGENT_SERVER_URL='http://127.0.0.1:18000' node "$app_dir/server/index.js" >> "$app_dir/logs/service.log" 2>&1 &
+nohup env HOME="$home" TERMINAL_CWD="$home" TERMINAL_ALLOWED_ORIGINS=${shellSingleQuoted(allowedOrigins)} TERMINAL_AGENT_SERVER_URL='http://127.0.0.1:18000' node "$app_dir/server/index.js" >> "$app_dir/logs/service.log" 2>&1 &
 pid=$!
 printf '%s\n' "$pid" > "$pid_file.tmp"; chmod 600 "$pid_file.tmp"; mv "$pid_file.tmp" "$pid_file"
 attempt=0
@@ -267,7 +264,7 @@ export const START_COMMAND = startCommand("http://localhost:8000");
 
 export async function probeSidecar(host: CanvasHost, home: string): Promise<SidecarProbe> {
   const value = taggedJson(await execute(host, home, PROBE_COMMAND, 20), "BACKEND_TERMINAL_PROBE") as Partial<SidecarProbe>;
-  if (!value || !["missing", "stopped", "ready", "incompatible"].includes(value.state ?? "") || typeof value.root !== "boolean" || typeof value.supported !== "boolean") {
+  if (!value || !["missing", "stopped", "ready", "incompatible"].includes(value.state ?? "") || typeof value.supported !== "boolean") {
     throw new Error("The sidecar probe returned incomplete data.");
   }
   return {
@@ -275,7 +272,6 @@ export async function probeSidecar(host: CanvasHost, home: string): Promise<Side
     version: typeof value.version === "string" ? value.version : null,
     nodeVersion: typeof value.nodeVersion === "string" ? value.nodeVersion : null,
     npmVersion: typeof value.npmVersion === "string" ? value.npmVersion : null,
-    root: value.root,
     supported: value.supported,
     message: typeof value.message === "string" ? value.message : null,
   };

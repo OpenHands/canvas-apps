@@ -148,7 +148,7 @@ function mountSetup(
     ["Version", artifact.version],
     ["Install path", runtimeDirectory(home)],
     ["Listener", "127.0.0.1:18080"],
-    ["Runtime", "Persistent root process; PTYs run with full machine authority"],
+    ["Runtime", "Persistent process; PTYs inherit the backend user's permissions"],
   ];
   for (const [label, value] of detailValues) {
     const row = element("div");
@@ -159,8 +159,8 @@ function mountSetup(
     "p",
     "terminal-setup__disclosure",
     needsInstall
-      ? `Installation stops any prior App-managed sidecar, writes bundled SHA-256-verified files, downloads pinned npm packages from the official registry, builds node-pty locally when required, and starts the service as root. Artifact ${artifact.sha256.slice(0, 12)}…`
-      : "Starting launches the already verified service as root. It validates the active Canvas backend key live before creating each PTY.",
+      ? `Installation stops any prior App-managed sidecar, writes bundled SHA-256-verified files, downloads pinned npm packages from the official registry, builds node-pty locally when required, and starts the service as the current backend user. Artifact ${artifact.sha256.slice(0, 12)}…`
+      : "Starting launches the already verified service as the current backend user. It validates the active Canvas backend key live before creating each PTY.",
   );
   const error = element("div", "terminal-setup__error");
   error.hidden = !probe.message;
@@ -176,7 +176,7 @@ function mountSetup(
     const consentLabel = element("label", "terminal-setup__consent");
     consent = element("input") as HTMLInputElement;
     consent.type = "checkbox";
-    consentLabel.append(consent, document.createTextNode(" I understand this installs and starts a root-level terminal service on the backend machine."));
+    consentLabel.append(consent, document.createTextNode(" I understand this installs and starts a terminal service with the current backend user's permissions."));
     root.append(title, summary, details, disclosure, consentLabel, error, actions);
   } else {
     root.append(title, summary, details, disclosure, error, actions);
@@ -186,7 +186,7 @@ function mountSetup(
 
   function setBusy(value: boolean, label?: string): void {
     busy = value;
-    primary.disabled = value || !probe.supported || !probe.root || Boolean(consent && !consent.checked);
+    primary.disabled = value || !probe.supported || Boolean(consent && !consent.checked);
     recheck.disabled = value;
     if (label) primary.textContent = label;
   }
@@ -237,8 +237,7 @@ function mountSetup(
   primary.addEventListener("click", () => void installOrStart());
   recheck.addEventListener("click", () => void check());
   setBusy(false);
-  if (!probe.root) showError("The Agent Server must run as root to install and run this terminal.");
-  else if (!probe.supported) showError(`Node.js 18+ and npm are required on a supported Linux or macOS backend. Detected: ${probe.nodeVersion ?? "no Node.js"}.`);
+  if (!probe.supported) showError(`Node.js 18+ and npm are required on a supported Linux or macOS backend. Detected: ${probe.nodeVersion ?? "no Node.js"}.`);
 
   return () => {
     disposed = true;

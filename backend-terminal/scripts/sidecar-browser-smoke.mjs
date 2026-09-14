@@ -22,7 +22,6 @@ const running = await startSidecar({
   allowedOrigins: new Set([canvasOrigin]),
   agentServerUrl: `http://127.0.0.1:${agentAddress.port}`,
   agentServerTimeoutMs: 1_000,
-  requireRoot: false,
   cwd: process.cwd(),
   shell: "/bin/bash",
   shellArgs: ["--noprofile", "--norc"],

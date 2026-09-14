@@ -18,7 +18,6 @@ const config: SidecarConfig = {
   allowedOrigins: new Set([allowedOrigin]),
   agentServerUrl: "http://127.0.0.1:1",
   agentServerTimeoutMs: 1_000,
-  requireRoot: false,
   cwd: process.cwd(),
   shell: "/bin/bash",
   shellArgs: ["--noprofile", "--norc"],
@@ -60,11 +59,14 @@ afterAll(async () => {
 });
 
 describe("PTY sidecar", () => {
-  it("refuses to start outside a root runtime by default", async () => {
+  it("starts as the current non-root user", async () => {
     const getuid = vi.spyOn(process, "getuid").mockReturnValue(1_000);
+    let nonRoot: RunningSidecar | undefined;
     try {
-      await expect(startSidecar({ ...config, requireRoot: true })).rejects.toThrow("must run as root");
+      nonRoot = await startSidecar({ ...config, port: 0 });
+      expect(nonRoot.port).toBeGreaterThan(0);
     } finally {
+      await nonRoot?.close();
       getuid.mockRestore();
     }
   });
@@ -72,7 +74,7 @@ describe("PTY sidecar", () => {
 
   it("reports health and rejects cross-origin token issuance", async () => {
     const health = await fetch(`${baseUrl}/api/health`).then((response) => response.json());
-    expect(health).toEqual({ status: "ok", version: "0.3.0", sessions: 0, max_sessions: 2 });
+    expect(health).toEqual({ status: "ok", version: "0.3.1", sessions: 0, max_sessions: 2 });
 
     const denied = await issueCapability("http://evil.example", "cross-site");
     expect(denied.status).toBe(403);

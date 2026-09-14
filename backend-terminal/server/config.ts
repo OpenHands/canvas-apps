@@ -10,7 +10,6 @@ export type SidecarConfig = {
   allowedOrigins: ReadonlySet<string>;
   agentServerUrl: string;
   agentServerTimeoutMs: number;
-  requireRoot: boolean;
   cwd: string;
   shell: string;
   shellArgs: string[];
@@ -27,13 +26,6 @@ function integer(value: string | undefined, fallback: number, minimum: number, m
     throw new Error(`${name} must be an integer from ${minimum} to ${maximum}.`);
   }
   return parsed;
-}
-
-function boolean(value: string | undefined, fallback: boolean, name: string): boolean {
-  if (value === undefined) return fallback;
-  if (value === "true") return true;
-  if (value === "false") return false;
-  throw new Error(`${name} must be exactly true or false.`);
 }
 
 function normalizeOrigins(value: string | undefined): ReadonlySet<string> {
@@ -67,7 +59,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SidecarConfig 
     allowedOrigins: normalizeOrigins(env.TERMINAL_ALLOWED_ORIGINS),
     agentServerUrl: normalizeAgentServerUrl(env.TERMINAL_AGENT_SERVER_URL ?? "http://127.0.0.1:18000"),
     agentServerTimeoutMs: integer(env.TERMINAL_AGENT_SERVER_TIMEOUT_MS, 3_000, 500, 10_000, "TERMINAL_AGENT_SERVER_TIMEOUT_MS"),
-    requireRoot: boolean(env.TERMINAL_REQUIRE_ROOT, true, "TERMINAL_REQUIRE_ROOT"),
     cwd: existingDirectory(env.TERMINAL_CWD ?? homedir()),
     shell: env.TERMINAL_SHELL ?? env.SHELL ?? (process.platform === "win32" ? "powershell.exe" : "/bin/bash"),
     shellArgs: stringArray(env.TERMINAL_SHELL_ARGS),

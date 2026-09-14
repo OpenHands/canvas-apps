@@ -9,7 +9,7 @@ import { loadConfig, type SidecarConfig } from "./config.js";
 import { validateAgentServerKey } from "./agent-server-auth.js";
 import { CapabilityStore } from "./tokens.js";
 
-export const SIDECAR_VERSION = "0.3.0";
+export const SIDECAR_VERSION = "0.3.1";
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 const SHELL_ENV_KEYS = ["HOME", "USER", "LOGNAME", "PATH", "SHELL", "LANG", "LC_ALL", "TMPDIR"] as const;
 
@@ -60,9 +60,6 @@ function shellEnvironment(config: SidecarConfig): Record<string, string> {
 }
 
 export async function startSidecar(config = loadConfig()): Promise<RunningSidecar> {
-  if (config.requireRoot && (typeof process.getuid !== "function" || process.getuid() !== 0)) {
-    throw new Error("Backend Terminal must run as root. Set TERMINAL_REQUIRE_ROOT=false only for development and tests.");
-  }
   if (!LOOPBACK_HOSTS.has(config.host) && process.env.TERMINAL_ALLOW_REMOTE !== "true") {
     throw new Error("Refusing a non-loopback bind. Set TERMINAL_ALLOW_REMOTE=true only behind an authenticated TLS proxy.");
   }

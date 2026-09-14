@@ -16,10 +16,9 @@ type Harness = {
 function encodedProbe(state: "missing" | "stopped" | "ready" | "incompatible", overrides: Record<string, unknown> = {}): string {
   return `BACKEND_TERMINAL_PROBE\t${btoa(JSON.stringify({
     state,
-    version: state === "ready" ? "0.3.0" : null,
+    version: state === "ready" ? "0.3.1" : null,
     nodeVersion: "v23.8.0",
     npmVersion: "10.9.2",
-    root: true,
     supported: true,
     message: null,
     ...overrides,
@@ -35,7 +34,7 @@ function createHarness(requestImpl?: Request, kind: "local" | "cloud" = "local")
   }));
   const host: Host = {
     apiVersion: "1",
-    extension: { name: "backend-terminal", version: "0.3.0", resolvedRef: "test" },
+    extension: { name: "backend-terminal", version: "0.3.1", resolvedRef: "test" },
     backend: { id: `${kind}-test`, kind, orgId: kind === "cloud" ? "org-1" : null },
     agentServer: { request: request as Host["agentServer"]["request"] },
     registerPage(id, mount) {
@@ -168,6 +167,7 @@ describe("Backend Terminal sidecar extension", () => {
     const container = document.createElement("div");
     const dispose = harness.mount()({ container, path: "" }) as () => void;
     await vi.waitFor(() => expect(container.textContent).toContain("Install terminal sidecar"));
+    expect(container.textContent).toContain("current backend user's permissions");
     const install = [...container.querySelectorAll("button")].find((button) => button.textContent === "Install and start") as HTMLButtonElement;
     expect(install.disabled).toBe(true);
     expect(container.querySelector("iframe")).toBeNull();
