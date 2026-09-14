@@ -14,8 +14,8 @@ export const BOARD_MARKUP = `
 <header class="topbar">
   <div class="topbar-controls">
     <div class="control control-workspace">
-      <select id="workspace-select" aria-label="Workspace"><option value="">Choose a workspace</option></select>
       <div id="workspace-indicators" class="workspace-indicators" aria-label="Projects with unfinished cards"></div>
+      <select id="workspace-select" aria-label="Workspace"><option value="">Choose a workspace</option></select>
     </div>
     <div class="control control-accent" id="ctl-accent" hidden>
       <button type="button" id="accent-toggle" class="ghost-btn accent-btn"

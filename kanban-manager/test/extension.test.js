@@ -971,14 +971,23 @@ describe("workspace picker", () => {
     dispose();
   });
 
-  it("links every project with unfinished cards beside the picker", async () => {
+  it("links unfinished projects with their own colours and visible tooltips", async () => {
     dom.store.clear();
     const home = "/home/tester";
     const root = `${home}/.openhands/vibe-manager`;
     const workspaces = [
-      { id: "w-alpha", name: "Alpha", path: "/git/alpha", max_concurrent: 2 },
-      { id: "w-beta", name: "Beta", path: "/git/beta", max_concurrent: 2 },
-      { id: "w-done", name: "Done", path: "/git/done", max_concurrent: 2 },
+      {
+        id: "w-alpha", name: "Alpha", path: "/git/alpha",
+        max_concurrent: 2, accent: "jade",
+      },
+      {
+        id: "w-beta", name: "Beta", path: "/git/beta",
+        max_concurrent: 2, accent: "azure",
+      },
+      {
+        id: "w-done", name: "Done", path: "/git/done",
+        max_concurrent: 2, accent: "slate",
+      },
     ];
     const ticket = (id, status) => ({
       id, status, entries: [{ id: `e-${id}`, author: "user", body: id, created_at: 1 }],
@@ -1000,31 +1009,45 @@ describe("workspace picker", () => {
     const navigated = [];
     const container = makeContainer();
     const dispose = mountBoard({
-      container, path: "", navigate: (target) => navigated.push(target), host,
+      container, path: "Alpha", navigate: (target) => navigated.push(target), host,
     });
 
-    await waitFor(() => container.querySelectorAll(".workspace-indicator").length === 2);
-    const indicators = [...container.querySelectorAll(".workspace-indicator")];
-    assert.deepEqual(indicators.map((el) => el.textContent), ["2", "1"]);
-    assert.deepEqual(indicators.map((el) => el.getAttribute("title")), ["Alpha", "Beta"]);
-    assert.deepEqual(
-      indicators.map((el) => el.getAttribute("aria-label")),
-      ["Alpha: 2 unfinished cards", "Beta: 1 unfinished card"],
-    );
-    assert.equal(
-      container.querySelector("#workspace-indicators").previousElementSibling.id,
-      "workspace-select",
-      "indicators sit immediately beside the project picker",
-    );
+    try {
+      await waitFor(() => container.querySelectorAll(".workspace-indicator").length === 1);
+      let indicator = container.querySelector(".workspace-indicator");
+      assert.equal(indicator.dataset.path, "/git/beta", "the active Alpha badge is hidden");
+      assert.equal(indicator.dataset.accent, "azure", "Beta uses its own primary colour");
+      assert.equal(indicator.textContent, "1");
+      assert.equal(indicator.hasAttribute("title"), false, "native title tooltips are not used");
+      assert.equal(indicator.getAttribute("aria-label"), "Beta: 1 unfinished card");
+      const tooltip = indicator.parentElement.querySelector('[role="tooltip"]');
+      assert.equal(tooltip.textContent, "Beta");
+      assert.equal(indicator.getAttribute("aria-describedby"), tooltip.id);
+      assert.equal(
+        container.querySelector("#workspace-indicators").nextElementSibling.id,
+        "workspace-select",
+        "indicators sit immediately left of the project picker",
+      );
+      assert.match(
+        document.getElementById("vibe-ext-style").textContent,
+        /workspace-indicator-item:hover[^}]+workspace-indicator-tooltip/,
+        "the rendered tooltip is exposed on hover",
+      );
 
-    indicators[1].dispatchEvent(new dom.window.Event("click", { bubbles: true }));
-    await waitFor(() => navigated.includes("/extensions/kanban-manager/board/Beta"));
-    assert.equal(container.querySelector("#workspace-select").value, "/git/beta");
-    await waitFor(() =>
-      container.querySelector('.workspace-indicator[data-path="/git/beta"]')
-        ?.getAttribute("aria-current") === "page",
-    );
-    dispose();
+      indicator.dispatchEvent(new dom.window.Event("click", { bubbles: true }));
+      await waitFor(() => navigated.includes("/extensions/kanban-manager/board/Beta"));
+      assert.equal(container.querySelector("#workspace-select").value, "/git/beta");
+      await waitFor(() =>
+        container.querySelector('.workspace-indicator[data-path="/git/alpha"]') !== null,
+      );
+      indicator = container.querySelector(".workspace-indicator");
+      assert.equal(indicator.dataset.path, "/git/alpha", "the new active Beta badge is hidden");
+      assert.equal(indicator.dataset.accent, "jade", "Alpha keeps its own primary colour");
+      assert.equal(indicator.textContent, "2");
+      assert.equal(indicator.parentElement.querySelector('[role="tooltip"]').textContent, "Alpha");
+    } finally {
+      dispose();
+    }
   });
 });
 

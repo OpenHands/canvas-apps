@@ -423,18 +423,27 @@ export function mountBoard({ container, path, navigate, host }) {
     for (const workspace of state.workspaces.selected) {
       const count = Number(workspace.unfinished_count) || 0;
       if (!count) continue;
+      if (workspace.id === state.ws?.id) continue;
+      const item = document.createElement("span");
+      item.className = "workspace-indicator-item";
       const button = document.createElement("button");
       button.type = "button";
       button.className = "workspace-indicator";
       button.dataset.path = workspace.path;
-      button.title = workspace.name;
+      button.dataset.accent = workspace.accent || DEFAULT_ACCENT;
       button.textContent = String(count);
       button.setAttribute(
         "aria-label",
         `${workspace.name}: ${count} unfinished ${count === 1 ? "card" : "cards"}`,
       );
-      if (workspace.id === state.ws?.id) button.setAttribute("aria-current", "page");
-      wrap.appendChild(button);
+      const tooltip = document.createElement("span");
+      tooltip.id = `workspace-indicator-tooltip-${workspace.id}`;
+      tooltip.className = "workspace-indicator-tooltip";
+      tooltip.setAttribute("role", "tooltip");
+      tooltip.textContent = workspace.name;
+      button.setAttribute("aria-describedby", tooltip.id);
+      item.append(button, tooltip);
+      wrap.appendChild(item);
     }
   }
 

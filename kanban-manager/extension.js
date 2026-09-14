@@ -216,13 +216,13 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ` };
 
-// src/markup.js
+// kanban-manager/src/markup.js
 var BOARD_MARKUP = `
 <header class="topbar">
   <div class="topbar-controls">
     <div class="control control-workspace">
-      <select id="workspace-select" aria-label="Workspace"><option value="">Choose a workspace</option></select>
       <div id="workspace-indicators" class="workspace-indicators" aria-label="Projects with unfinished cards"></div>
+      <select id="workspace-select" aria-label="Workspace"><option value="">Choose a workspace</option></select>
     </div>
     <div class="control control-accent" id="ctl-accent" hidden>
       <button type="button" id="accent-toggle" class="ghost-btn accent-btn"
@@ -422,7 +422,7 @@ var BOARD_MARKUP = `
 </aside>
 `;
 
-// src/store.js
+// kanban-manager/src/store.js
 var STORE_SUBPATH = ".openhands/vibe-manager";
 var STATUSES = ["pending", "in_progress", "needs_input", "finished"];
 var VERIFIED = "verified";
@@ -906,7 +906,7 @@ function isNotFound(err) {
   return /\b404\b|not found/i.test(err?.message || "");
 }
 
-// src/live.js
+// kanban-manager/src/live.js
 var AUTOMATION_BASE = "/api/automation/v1";
 var TtlCache = class {
   constructor(ttlMs) {
@@ -1154,7 +1154,7 @@ var Live = class {
   }
 };
 
-// src/manager.js
+// kanban-manager/src/manager.js
 var AUTOMATION_BASE2 = "/api/automation/v1";
 var DEFAULT_AGENT_SERVER = "http://127.0.0.1:18000";
 var CRON_EVERY_MINUTE = "* * * * *";
@@ -1312,7 +1312,7 @@ var Manager = class {
   }
 };
 
-// src/managerchat.js
+// kanban-manager/src/managerchat.js
 var CHAT_MARKER = "<!-- vibe-manager-skill -->";
 var CHAT_ROLE = "manager_chat";
 var MAX_PAGES = 20;
@@ -1447,7 +1447,7 @@ var ManagerChat = class {
   }
 };
 
-// src/extension.js
+// kanban-manager/src/extension.js
 var HOST_API_VERSION = "1";
 var PAGE_ROOT = "/extensions/kanban-manager/board";
 var STYLE_ELEMENT_ID = "vibe-ext-style";
@@ -1670,20 +1670,45 @@ var EXTENSION_CSS = true ? `.vibe-ext { --vibe-rem: 1.2rem; }
 .vibe-ext select:hover, .vibe-ext input[type=number]:hover { border-color: var(--text-faint); }
 
 .vibe-ext .workspace-indicators { display: flex; align-items: center; gap: var(--s2); }
+.vibe-ext .workspace-indicator-item { display: flex; position: relative; }
 .vibe-ext .workspace-indicator {
+  --workspace-accent: var(--accent-ember);
   width: calc(1.625 * var(--vibe-rem)); height: calc(1.625 * var(--vibe-rem)); flex: none; padding: 0;
-  border: 1px solid color-mix(in srgb, var(--accent) 65%, var(--line));
-  border-radius: 50%; background: color-mix(in srgb, var(--accent) 18%, var(--field));
-  color: var(--text); font-family: var(--mono); font-size: calc(0.6875 * var(--vibe-rem));
+  border: 1px solid var(--workspace-accent); border-radius: 50%;
+  background: color-mix(in srgb, var(--workspace-accent) 68%, #17141f);
+  color: #fff; font-family: var(--mono); font-size: calc(0.6875 * var(--vibe-rem));
   font-weight: 700; line-height: 1; cursor: pointer;
   transition: transform .12s, background .12s, border-color .12s;
 }
+.vibe-ext .workspace-indicator[data-accent="ember"] { --workspace-accent: var(--accent-ember); }
+.vibe-ext .workspace-indicator[data-accent="amber"] { --workspace-accent: var(--accent-amber); }
+.vibe-ext .workspace-indicator[data-accent="citron"] { --workspace-accent: var(--accent-citron); }
+.vibe-ext .workspace-indicator[data-accent="jade"] { --workspace-accent: var(--accent-jade); }
+.vibe-ext .workspace-indicator[data-accent="teal"] { --workspace-accent: var(--accent-teal); }
+.vibe-ext .workspace-indicator[data-accent="azure"] { --workspace-accent: var(--accent-azure); }
+.vibe-ext .workspace-indicator[data-accent="iris"] { --workspace-accent: var(--accent-iris); }
+.vibe-ext .workspace-indicator[data-accent="orchid"] { --workspace-accent: var(--accent-orchid); }
+.vibe-ext .workspace-indicator[data-accent="rose"] { --workspace-accent: var(--accent-rose); }
+.vibe-ext .workspace-indicator[data-accent="slate"] { --workspace-accent: var(--accent-slate); }
 .vibe-ext .workspace-indicator:hover, .vibe-ext .workspace-indicator:focus-visible {
-  transform: translateY(-1px); background: color-mix(in srgb, var(--accent) 32%, var(--field));
-  border-color: var(--accent); outline: none;
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--workspace-accent) 78%, #17141f);
 }
-.vibe-ext .workspace-indicator[aria-current="page"] {
-  background: var(--accent); color: var(--btn-text); border-color: var(--accent);
+.vibe-ext .workspace-indicator:focus-visible {
+  outline: 2px solid var(--workspace-accent); outline-offset: 2px;
+}
+.vibe-ext .workspace-indicator-tooltip {
+  position: absolute; top: calc(100% + var(--s2)); left: 50%; z-index: 5;
+  width: max-content; max-width: calc(16 * var(--vibe-rem)); padding: var(--s1) var(--s2);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--card); color: var(--text); box-shadow: var(--shadow-lift);
+  font-family: var(--sans); font-size: calc(0.6875 * var(--vibe-rem)); line-height: 1.35;
+  overflow-wrap: anywhere; pointer-events: none; opacity: 0; visibility: hidden;
+  transform: translate(-50%, -2px); transition: opacity .12s, transform .12s, visibility .12s;
+}
+.vibe-ext .workspace-indicator-item:hover .workspace-indicator-tooltip,
+.vibe-ext .workspace-indicator:focus-visible + .workspace-indicator-tooltip {
+  opacity: 1; visibility: visible; transform: translate(-50%, 0);
 }
 
 .vibe-ext .seg {
@@ -2646,18 +2671,27 @@ function mountBoard({ container, path, navigate, host }) {
     for (const workspace of state.workspaces.selected) {
       const count = Number(workspace.unfinished_count) || 0;
       if (!count) continue;
+      if (workspace.id === state.ws?.id) continue;
+      const item = document.createElement("span");
+      item.className = "workspace-indicator-item";
       const button = document.createElement("button");
       button.type = "button";
       button.className = "workspace-indicator";
       button.dataset.path = workspace.path;
-      button.title = workspace.name;
+      button.dataset.accent = workspace.accent || DEFAULT_ACCENT;
       button.textContent = String(count);
       button.setAttribute(
         "aria-label",
         `${workspace.name}: ${count} unfinished ${count === 1 ? "card" : "cards"}`
       );
-      if (workspace.id === state.ws?.id) button.setAttribute("aria-current", "page");
-      wrap.appendChild(button);
+      const tooltip = document.createElement("span");
+      tooltip.id = `workspace-indicator-tooltip-${workspace.id}`;
+      tooltip.className = "workspace-indicator-tooltip";
+      tooltip.setAttribute("role", "tooltip");
+      tooltip.textContent = workspace.name;
+      button.setAttribute("aria-describedby", tooltip.id);
+      item.append(button, tooltip);
+      wrap.appendChild(item);
     }
   }
   function readWorkspacePref() {
