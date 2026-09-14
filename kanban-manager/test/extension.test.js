@@ -74,6 +74,7 @@ test('built React App registers, restores SQLite board, submits, persists prefer
   try {
     assert.equal(app.registered.size, 1);
     await until(() => app.container.textContent.includes('Preserved request'));
+    assert.equal(app.container.querySelector('.backend-bar'), null);
     assert.equal(app.container.querySelector('.vibe-ext[data-theme="light"]').dataset.accent, 'iris');
     await until(() => app.container.querySelector('.workspace-indicator'));
     const indicator = app.container.querySelector('.workspace-indicator');
@@ -179,10 +180,6 @@ test('cold mounts and refreshes never show onboarding while the real backend pro
       await delay(200);
       assert.equal(backend.requests.slice(count).filter(r => r.path === '/kanban-manager/api/runtime').length, 1);
       assert.equal(!!app.container.querySelector('.backend-setup'), false);
-      click([...app.container.querySelectorAll('button')].find(b => b.textContent === 'Backend setup'));
-      await until(() => app.container.querySelector('.backend-setup') && [...app.container.querySelectorAll('button')].some(b => b.textContent === 'Return to board' && !b.disabled));
-      click([...app.container.querySelectorAll('button')].find(b => b.textContent === 'Return to board'));
-      await until(() => app.container.querySelector('#board'));
     } finally { release(); app.dispose(); }
   }
 });

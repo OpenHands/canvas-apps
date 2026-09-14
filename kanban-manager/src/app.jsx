@@ -106,7 +106,6 @@ export function App({ host, context }) {
 
   return <div className="kanban-app">
     <style>{`
-      .kanban-app .backend-bar { display:flex; align-items:center; gap:1rem; padding:.5rem 1rem; }
       .kanban-app .backend-setup { padding:2rem; max-width:60rem; margin:auto; }
       .kanban-app .backend-setup label { display:block; margin:1rem 0; }
       .kanban-app .backend-setup input:not([type=checkbox]) { display:block; width:100%; }
@@ -114,12 +113,6 @@ export function App({ host, context }) {
       .kanban-app .backend-setup pre { white-space:pre-wrap; overflow-wrap:anywhere; }
       .kanban-app .backend-error { color:var(--danger); padding:1rem; }
     `}</style>
-    <div className="vibe-ext backend-bar">
-      <span role="status">{status?.running ? 'Backend connected · SQLite' : 'Kanban backend setup'}</span>
-      <button disabled={busy} onClick={() => { if (setup) showBoard(); else { setSetup(true); perform(undefined, true); } }}>{setup ? 'Return to board' : 'Backend setup'}</button>
-      {error && !showSetup && <span role="alert">{error} — open Backend setup to recheck.</span>}
-      {runtime?.legacy_changed && <strong role="alert">Legacy files changed after migration. Close old App tabs and reconcile the preserved files; SQLite was not overwritten.</strong>}
-    </div>
     {showSetup ? <section className="vibe-ext backend-setup" aria-label="Kanban backend onboarding">
       <h1>Kanban Manager backend</h1>
       <p>This App runs a private FastAPI sidecar on the selected Agent Server. Your board lives in SQLite, not in your browser or the installed App directory.</p>
