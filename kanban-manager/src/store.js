@@ -29,6 +29,7 @@ export const STORE_SUBPATH = ".openhands/vibe-manager";
 
 export const STATUSES = ["pending", "in_progress", "needs_input", "finished"];
 export const VERIFIED = "verified";
+export const UNFINISHED_STATUSES = new Set(["pending", "in_progress", "needs_input"]);
 
 /* Primary colour of a workspace's theme, stored on its index.json record. The
    palette lives in the stylesheet (--accent-<id>); this is only the fallback
@@ -361,6 +362,16 @@ export class Store {
 
     const merged = [...available.filter((a) => !seen.has(a.path))];
     return { available: merged, selected };
+  }
+
+  async unfinishedCounts(workspaces) {
+    const boards = await Promise.all(workspaces.map((workspace) => this.readBoard(workspace.id)));
+    return Object.fromEntries(workspaces.map((workspace, position) => [
+      workspace.id,
+      boards[position].tickets.filter(
+        (ticket) => UNFINISHED_STATUSES.has(ticket.status),
+      ).length,
+    ]));
   }
 
   async selectWorkspace(path) {

@@ -17,7 +17,12 @@
 */
 
 import { BOARD_MARKUP } from "./markup.js";
-import { Store, DEFAULT_ACCENT, DEFAULT_BUDGET } from "./store.js";
+import {
+  Store,
+  DEFAULT_ACCENT,
+  DEFAULT_BUDGET,
+  UNFINISHED_STATUSES,
+} from "./store.js";
 import { Live } from "./live.js";
 import { Manager } from "./manager.js";
 import { ManagerChat } from "./managerchat.js";
@@ -200,6 +205,7 @@ export function mountBoard({ container, path, navigate, host }) {
     newTicketFiles: [],
     theme: readTheme(),
     pollTimer: null,
+    workspaceTimer: null,
     automationTimer: null,
     // manager chat: {wsId, conversationId, url, messages, cursor, status, action}
     chat: null,
@@ -352,7 +358,16 @@ export function mountBoard({ container, path, navigate, host }) {
   async function loadWorkspaces() {
     const data = await state.store.listWorkspaces();
     if (!alive()) return;
-    state.workspaces = data;
+    const previousCounts = new Map(
+      state.workspaces.selected.map((workspace) => [workspace.id, workspace.unfinished_count]),
+    );
+    state.workspaces = {
+      ...data,
+      selected: data.selected.map((workspace) => ({
+        ...workspace,
+        unfinished_count: previousCounts.get(workspace.id) || 0,
+      })),
+    };
     const sel = $("#workspace-select");
     const current = sel.value;
     sel.innerHTML = '<option value="">Choose a workspace</option>';
@@ -382,6 +397,54 @@ export function mountBoard({ container, path, navigate, host }) {
       sel.appendChild(og);
     }
     sel.value = current || readWorkspacePref();
+    renderWorkspaceIndicators();
+    refreshWorkspaceCounts();
+  }
+
+  async function refreshWorkspaceCounts() {
+    const workspaces = state.workspaces.selected;
+    try {
+      const counts = await state.store.unfinishedCounts(workspaces);
+      if (!alive()) return;
+      for (const workspace of state.workspaces.selected) {
+        if (workspace.id !== state.ws?.id && Object.hasOwn(counts, workspace.id)) {
+          workspace.unfinished_count = counts[workspace.id];
+        }
+      }
+      renderWorkspaceIndicators();
+    } catch (error) {
+      if (alive()) console.error(error);
+    }
+  }
+
+  function renderWorkspaceIndicators() {
+    const wrap = $("#workspace-indicators");
+    wrap.replaceChildren();
+    for (const workspace of state.workspaces.selected) {
+      const count = Number(workspace.unfinished_count) || 0;
+      if (!count) continue;
+      if (workspace.id === state.ws?.id) continue;
+      const item = document.createElement("span");
+      item.className = "workspace-indicator-item";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "workspace-indicator";
+      button.dataset.path = workspace.path;
+      button.dataset.accent = workspace.accent || DEFAULT_ACCENT;
+      button.textContent = String(count);
+      button.setAttribute(
+        "aria-label",
+        `${workspace.name}: ${count} unfinished ${count === 1 ? "card" : "cards"}`,
+      );
+      const tooltip = document.createElement("span");
+      tooltip.id = `workspace-indicator-tooltip-${workspace.id}`;
+      tooltip.className = "workspace-indicator-tooltip";
+      tooltip.setAttribute("role", "tooltip");
+      tooltip.textContent = workspace.name;
+      button.setAttribute("aria-describedby", tooltip.id);
+      item.append(button, tooltip);
+      wrap.appendChild(item);
+    }
   }
 
   function readWorkspacePref() {
@@ -467,6 +530,15 @@ export function mountBoard({ container, path, navigate, host }) {
          from the agent server directly, cached and refreshed in the
          background so a 5s poll never blocks on them. */
       state.tickets = state.live.decorate(data.tickets, "");
+      const listed = state.workspaces.selected.find(
+        (workspace) => workspace.id === state.ws.id,
+      );
+      if (listed) {
+        listed.unfinished_count = state.tickets.filter(
+          (ticket) => UNFINISHED_STATUSES.has(ticket.status),
+        ).length;
+      }
+      renderWorkspaceIndicators();
       renderBoard();
       renderSettings();
       if (state.drawerTicketId) renderDrawer();
@@ -489,6 +561,20 @@ export function mountBoard({ container, path, navigate, host }) {
     state.automationTimer = null;
   }
   cleanups.push(stopPolling);
+
+  function startWorkspacePolling() {
+    clearInterval(state.workspaceTimer);
+    state.workspaceTimer = setInterval(
+      () => loadWorkspaces().catch((error) => { if (alive()) console.error(error); }),
+      30000,
+    );
+  }
+
+  function stopWorkspacePolling() {
+    clearInterval(state.workspaceTimer);
+    state.workspaceTimer = null;
+  }
+  cleanups.push(stopWorkspacePolling);
 
   /* ----------------------------------------------- manager automation badge */
 
@@ -1429,6 +1515,10 @@ export function mountBoard({ container, path, navigate, host }) {
     on($("#api-retry"), "click", () => connect());
 
     on($("#workspace-select"), "change", (e) => selectWorkspace(e.target.value));
+    on($("#workspace-indicators"), "click", (e) => {
+      const button = e.target.closest(".workspace-indicator");
+      if (button) selectWorkspace(button.dataset.path);
+    });
 
     on($("#new-ticket-form"), "submit", (e) => {
       e.preventDefault();
@@ -1539,6 +1629,7 @@ export function mountBoard({ container, path, navigate, host }) {
   async function start() {
     await loadWorkspaces();
     if (!alive()) return;
+    startWorkspacePolling();
 
     const routeName = workspaceNameFromRoute(path);
     const routePath = routeName ? workspacePathFromName(routeName) : null;

@@ -461,32 +461,14 @@ def conv_statuses(tickets: list[dict]) -> dict[str, str]:
 # ------------------------------------------------------------- manager kickoff
 
 def model_selection_instructions() -> str:
-    """Manager-prompt section listing the agent server's LLM profiles.
-
-    Degrades to a self-serve instruction if the agent server is unreachable at
-    prompt-build time so the manager can still pick a model.
-    """
-    try:
-        data = vibestore.llm_profiles()
-        active = data.get("active_profile")
-        lines = "\n".join(
-            f"- `{p['name']}` → {p['model']}"
-            + (" **(active default)**" if p["name"] == active else "")
-            for p in data["profiles"]
-        )
-        if not lines:
-            raise ValueError("no profiles")
-    except Exception:
-        lines = f"- run `{VIBECTL} profiles` for the current list (name → model)"
-    return f"""## Model selection for workers
-Available LLM profiles on the agent server:
-{lines}
-Choose a model PER TASK and pass it as `--profile <name>` when dispatching (omit it to use the active default). Judge by the ticket's difficulty:
-- strongest/most expensive model → gnarly work: architecture, tricky debugging, large refactors, vague requirements
-- default → routine feature work and bug fixes
-- cheapest/fastest → trivial chores: copy tweaks, docs, config, one-liners
-Passing `--profile` to a follow-up switches that EXISTING conversation's model first — escalate a stuck worker to a stronger model this way.
-**The user's choice wins**: a ticket with a non-null `requested_model` runs on that profile, and passing `--ticket <ticket_id>` applies it for you — your `--profile` is ignored for that ticket. A null `requested_model` is "manager's choice": you pick, as above. Each ticket also carries `budget_usd`, the spend cap its worker gets; a worker that hits it is paused automatically and its card is moved to needs_input, so do not restart it without a new instruction from the user."""
+    """Manager-prompt policy for choosing worker LLM profiles."""
+    return """## Model selection for workers
+For manager-dispatched work, use only these GPT profiles and always pass the matching `--profile`:
+- `gpt-6-astra` → high effort: architecture, tricky debugging, large refactors, vague requirements
+- `gpt-5.6-sol` → medium/default effort: routine feature work and bug fixes
+- `gpt-5.6-terra` → low effort: trivial chores, copy tweaks, docs, config, and one-liners
+Do not select or recommend Anthropic profiles for manager-dispatched work. Passing `--profile` to a follow-up switches that EXISTING conversation's model first — escalate a stuck worker to a stronger GPT tier this way.
+**The user's choice wins**: a ticket with a non-null `requested_model` runs on that profile, and passing `--ticket <ticket_id>` applies it for you — your `--profile` is ignored for that ticket. A null `requested_model` is "manager's choice": you pick from the GPT tiers above. Each ticket also carries `budget_usd`, the spend cap its worker gets; a worker that hits it is paused automatically and its card is moved to needs_input, so do not restart it without a new instruction from the user."""
 
 
 def build_manager_prompt(ws: dict, tickets: list[dict]) -> str:
@@ -574,19 +556,20 @@ Worker dispatch — workers ALWAYS work in a git worktree, never in the main che
 
 ## Your job this run
 1. Read `AGENTS.md` in `{WORKSPACE_PATH}` (create it if missing) so you understand the project architecture. Keep it up to date: when finished tickets reveal new architecture/conventions, append concise notes so future workers benefit.
-2. For every ticket whose worker conversation just ended (conversation_status finished/idle but ticket still in_progress): read its final response. If it opened a PR, patch --pr-url and --status needs_input. In push-to-main mode verify the push landed on main and mark finished. If the worker failed or stalled (error/stuck), decide: send a corrective follow-up message, or mark needs_input with a concise append_entry asking the user for guidance.
+2. For every ticket whose worker conversation just ended (conversation_status finished/idle but ticket still in_progress): read its final response. If it opened a PR, patch --pr-url and --status needs_input. In push-to-main mode verify the push landed on main and normally mark finished. If the worker failed or stalled (error/stuck), decide: send a corrective follow-up message, or mark needs_input with a concise append_entry asking the user for guidance.
+   - **Report-back/information rule**: first determine the ticket's intent from its user entries. If the ticket says "report back", asks a question, or otherwise asks for information (including investigation, research, status, or an explanation), then after the worker reports the requested information always patch it to `--status needs_input`, even in push-to-main mode. Do not mark it finished merely because no code or commit was expected; needs_input means the requested report is ready for the user to read and respond to.
    - Conversely, if a ticket's conversation_status is **running** but the ticket is needs_input/finished/pending, the user likely resumed the agent manually (sent it a message directly). Set the ticket status back to in_progress (and clear a stale manager_note with `--manager-note ''`) so the board reflects that the agent is working again.
 3. For tickets with NEW user entries beyond dispatched_entry_count:
    - Only user/agent-authored entries count as new requests. If the entries beyond dispatched_entry_count are all manager comments (yours), there is nothing to relay — bump dispatched_entry_count to the current entry count so the board reads as fully dispatched, and move on.
-   - If the ticket already has its OWN conversation, prefer **reusing it**: send the new request as a follow-up message to that conversation, bump dispatched_entry_count to the current entry count, and ensure status is in_progress.
+   - If the ticket already has its OWN conversation, prefer **reusing it**: send a follow-up containing only the new user request and any new context needed to act on it, bump dispatched_entry_count to the current entry count, and ensure status is in_progress. The same ticket's existing conversation already contains its history, so do not replay the full prior ticket history in the follow-up.
    - A finished/needs_input ticket that receives a new user entry is automatically moved back to pending by the app; it moves to in_progress once you dispatch the follow-up.
 4. For pending tickets with no conversation: dispatch workers, **highest priority first** (lower priority_rank = higher priority; the user orders cards within columns).
    - Respect the concurrency cap: count worker conversations currently in execution_status "running" on this board; never exceed **{ws['max_concurrent']}**.
    - **Avoid conflicts**: think about which tickets touch the same files/subsystems. Serialize tickets that would collide — run only independent tickets concurrently.
    - **Deferral contract**: if you deliberately leave a pending ticket undispatched (conflict serialization, capacity, needs another ticket first), you MUST set a manager_note on it (e.g. "queued behind a1b2c3 to avoid conflicts in the audio engine"). This suppresses re-invocation loops. Clear/replace the note when you later dispatch it.
    - **One conversation per ticket**: never graft a new ticket onto another ticket's conversation, however related. A conversation belongs to the ticket it was created for, and once that ticket is finished/verified it is retired — every new ticket gets a fresh conversation. (Follow-ups on the SAME ticket still reuse its own conversation — see 3.) Carry over context by putting it in the new worker's prompt, not by reusing the old thread.
-5. Worker task prompts must be self-contained: the full ticket text (all user entries), the project path, a reminder to read AGENTS.md first, the push-mode instructions above (branch+PR, or push directly to main), and — in PR mode — to report the PR URL in their final message.
-   - **Attachments**: tickets may carry file/image attachments (see each ticket's `attachments` array). Each has a stable absolute `path` on this machine, readable from worker worktrees. In the worker prompt, list every attachment as `<filename> (<content_type>) at <path>` and tell the worker to read/view it from that path (agents can view images with the file viewer). Workers must `cp` an attachment into their worktree only if it should become part of the repo. Never inline file contents into the prompt yourself.
+5. Prompts that start a NEW worker conversation must be self-contained: the full ticket text (all user entries), the project path, a reminder to read AGENTS.md first, the push-mode instructions above (branch+PR, or push directly to main), and — in PR mode — to report the PR URL in their final message. Follow-ups to the same ticket are the exception: include only the new request/context needed, as described in 3, because that conversation already has the prior messages.
+   - **Attachments**: tickets may carry file/image attachments (see each ticket's `attachments` array). Each has a stable absolute `path` on this machine, readable from worker worktrees. In a new-conversation prompt, list every attachment as `<filename> (<content_type>) at <path>` and tell the worker to read/view it from that path (agents can view images with the file viewer). In a follow-up, mention only new attachments or ones relevant to the new request. Workers must `cp` an attachment into their worktree only if it should become part of the repo. Never inline file contents into the prompt yourself.
 6. Update every card you acted on: status, conversation_id, manager_note, dispatched_entry_count, and append_entry comments where the user needs context. Every ticket you dispatch MUST get its conversation_id set so the card links to its conversation.
    - **Note style rule**: manager_note and append_entry are STATUS ONLY — a few words about what happened, NEVER a description of the task itself (the card already shows the task). Good: "Worker dispatched", "Landed 37d9ab on origin/master", "Worker restarted for fix", "PR open, awaiting review". Bad: anything summarizing or paraphrasing the feature/bug. Two exceptions: deferral notes keep their short reason (see the deferral contract), and a needs_input append_entry may contain the specific question the user must answer.
 7. **Title rule**: every ticket you touch that has a null `title` MUST get one via `patch --title`. Format: one emoji prefix + ONE or TWO words, NEVER more than two words (e.g. "🐛 Login fix", "🎨 Dark mode", "📎 Attachments"). Keep existing titles unless the ticket's scope clearly changed.
