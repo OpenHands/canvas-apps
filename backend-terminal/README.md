@@ -6,7 +6,7 @@ Backend Terminal is an **App for Agent Canvas** with a sidecar-served SPA and a 
 
 1. Canvas Blob-imports the self-contained `extension.js` and mounts the Terminal page.
 2. The extension embeds the configured sidecar SPA in a sandboxed iframe bound to the exact Canvas parent origin.
-3. The SPA requests the active local backend API key from its exact parent window and a short-lived, one-use capability from its own origin.
+3. The extension resolves `openhands-active-backend` against `openhands-backends` in Canvas-owned localStorage, then the SPA requests that active local backend key from its exact parent window and a short-lived, one-use capability from its own origin.
 4. The SPA opens `/api/terminal` and sends both values only in its first WebSocket message.
 5. The sidecar validates the key live against its loopback Agent Server, then spawns a PTY. Closing the socket kills the shell.
 
@@ -28,7 +28,7 @@ The build emits:
 - `sidecar-dist/public/`: Vite SPA with xterm.js.
 - `sidecar-dist/server/`: Node HTTP, WebSocket, and PTY backend.
 
-`npm run check` performs strict type checking, 17 unit/integration tests including root enforcement, live key validation, and a real PTY session, all builds, Canvas static validation, and two Chromium smoke tests.
+`npm run check` performs strict type checking, 18 unit/integration tests including localStorage selection, root enforcement, live key validation, and a real PTY session, all builds, Canvas static validation, and two Chromium smoke tests.
 
 ## Run the sidecar
 
@@ -80,7 +80,7 @@ This app intentionally grants an interactive shell with the operating-system per
 
 - The server binds to loopback by default and refuses remote binds without explicit opt-in.
 - Capability issuance requires a same-origin browser fetch from the sidecar SPA; WebSocket upgrades require the exact sidecar host origin.
-- Canvas sends the active local backend key only to the exact iframe window/origin. The SPA keeps it in memory and sends it only in the WebSocket authentication frame; the sidecar never logs it or passes it to the PTY environment.
+- The extension reads the selected local backend key only from Canvas-owned `openhands-active-backend` and `openhands-backends` localStorage records, then sends it only to the exact iframe window/origin. The SPA keeps it in memory until the WebSocket authentication frame; the sidecar never persists or logs it and never passes it to the PTY environment.
 - The sidecar accepts a key only after a successful authenticated request to the configured loopback Agent Server, and it starts no PTY before that validation succeeds.
 - Capabilities are random, short-lived, one-use, bounded in number, and never placed in URLs.
 - WebSocket payloads, terminal dimensions, concurrent sessions, and idle lifetime are bounded.

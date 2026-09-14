@@ -32,7 +32,10 @@ try {
     let unregistered = false;
 
     try {
-      window.__AGENT_CANVAS_SESSION_API_KEY__ = "blob-smoke-backend-key";
+      localStorage.setItem("openhands-active-backend", JSON.stringify({ backendId: "smoke-backend", orgId: null }));
+      localStorage.setItem("openhands-backends", JSON.stringify([
+        { id: "smoke-backend", name: "Smoke", host: "http://127.0.0.1:18000", apiKey: "blob-smoke-backend-key", kind: "local" },
+      ]));
       const module = await import(blobUrl);
       const host = {
         apiVersion: "1",

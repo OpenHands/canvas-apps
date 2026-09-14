@@ -35,8 +35,6 @@ function createHarness(): Harness {
 
 beforeEach(() => {
   localStorage.clear();
-  sessionStorage.clear();
-  delete (window as Window & { __AGENT_CANVAS_SESSION_API_KEY__?: string }).__AGENT_CANVAS_SESSION_API_KEY__;
 });
 
 afterEach(() => {
@@ -129,8 +127,12 @@ describe("Backend Terminal sidecar extension", () => {
     expect(container.childElementCount).toBe(0);
   });
 
-  it("delivers the active backend key only to its configured iframe", () => {
-    (window as Window & { __AGENT_CANVAS_SESSION_API_KEY__?: string }).__AGENT_CANVAS_SESSION_API_KEY__ = "runtime-local-backend-key";
+  it("delivers the active localStorage backend key only to its configured iframe", () => {
+    localStorage.setItem("openhands-active-backend", JSON.stringify({ backendId: "local-test", orgId: null }));
+    localStorage.setItem("openhands-backends", JSON.stringify([
+      { id: "other-local", name: "Other", host: "http://127.0.0.1:9000", apiKey: "wrong-backend-key", kind: "local" },
+      { id: "local-test", name: "Local", host: "http://127.0.0.1:8000", apiKey: "active-local-backend-key", kind: "local" },
+    ]));
     const harness = createHarness();
     activate(harness.host);
     const container = document.createElement("div");
@@ -154,12 +156,39 @@ describe("Backend Terminal sidecar extension", () => {
     expect(postMessage).toHaveBeenCalledWith({
       type: "backend-terminal:credentials",
       requestId: "request-1",
-      apiKey: "runtime-local-backend-key",
+      apiKey: "active-local-backend-key",
     }, "http://localhost:18080");
 
     dispose?.();
   });
 
+  it("rejects credential requests without an active localStorage local backend", () => {
+    localStorage.setItem("openhands-active-backend", JSON.stringify({ backendId: "cloud-test", orgId: "org-1" }));
+    localStorage.setItem("openhands-backends", JSON.stringify([
+      { id: "cloud-test", name: "Cloud", host: "https://app.all-hands.dev", apiKey: "cloud-backend-key", kind: "cloud" },
+    ]));
+    const harness = createHarness();
+    activate(harness.host);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const dispose = harness.mount()({ container, path: "" });
+    const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+    const postMessage = vi.spyOn(iframe.contentWindow!, "postMessage");
+
+    window.dispatchEvent(new MessageEvent("message", {
+      source: iframe.contentWindow,
+      origin: "http://localhost:18080",
+      data: { type: "backend-terminal:credentials-request", requestId: "request-cloud" },
+    }));
+
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "backend-terminal:credentials-error",
+      requestId: "request-cloud",
+      message: "Canvas has no active local backend API key.",
+    }, "http://localhost:18080");
+    expect(container.textContent).toContain("No active local backend API key");
+    dispose?.();
+  });
 
   it("renders help and unknown nested routes", () => {
     const harness = createHarness();

@@ -35,35 +35,25 @@ type StoredBackend = {
 };
 
 function backendApiKey(): string | null {
-  const runtimeKey = (window as Window & { __AGENT_CANVAS_SESSION_API_KEY__?: unknown }).__AGENT_CANVAS_SESSION_API_KEY__;
-  if (typeof runtimeKey === "string" && runtimeKey.length >= 8) return runtimeKey;
-
   try {
-    const selectedRaw = sessionStorage.getItem("openhands-active-backend") ?? localStorage.getItem("openhands-active-backend");
-    const selected: unknown = selectedRaw ? JSON.parse(selectedRaw) : null;
+    const selected: unknown = JSON.parse(localStorage.getItem("openhands-active-backend") ?? "null");
     const backends: unknown = JSON.parse(localStorage.getItem("openhands-backends") ?? "[]");
     if (
-      typeof selected === "object" && selected !== null && "backendId" in selected && typeof selected.backendId === "string" &&
-      Array.isArray(backends)
-    ) {
-      const backend = backends.find((value): value is StoredBackend => (
-        typeof value === "object" && value !== null &&
-        "id" in value && value.id === selected.backendId &&
-        "kind" in value && value.kind === "local" &&
-        "apiKey" in value && typeof value.apiKey === "string"
-      ));
-      if (backend?.apiKey && backend.apiKey.length >= 8) return backend.apiKey;
-    }
+      typeof selected !== "object" || selected === null ||
+      !("backendId" in selected) || typeof selected.backendId !== "string" ||
+      !Array.isArray(backends)
+    ) return null;
 
-    const legacy: unknown = JSON.parse(localStorage.getItem("openhands-agent-server-config") ?? "null");
-    if (
-      typeof legacy === "object" && legacy !== null &&
-      "sessionApiKey" in legacy && typeof legacy.sessionApiKey === "string" && legacy.sessionApiKey.length >= 8
-    ) return legacy.sessionApiKey;
+    const backend = backends.find((value): value is StoredBackend => (
+      typeof value === "object" && value !== null &&
+      "id" in value && value.id === selected.backendId &&
+      "kind" in value && value.kind === "local" &&
+      "apiKey" in value && typeof value.apiKey === "string"
+    ));
+    return backend?.apiKey && backend.apiKey.length >= 8 ? backend.apiKey : null;
   } catch {
     return null;
   }
-  return null;
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(
