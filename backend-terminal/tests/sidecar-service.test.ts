@@ -92,13 +92,16 @@ describe("sidecar provisioning", () => {
   it("embeds only checksummed runtime files and matching versions", () => {
     expect(artifact.schemaVersion).toBe(1);
     expect(artifact.app).toBe("backend-terminal");
-    expect(artifact.version).toBe("0.3.2");
-    expect(artifact.files.map((file) => file.path)).toEqual(expect.arrayContaining([
+    expect(artifact.version).toBe("0.4.0");
+    expect(artifact.files.map((file) => file.path)).toEqual([
       "package.json",
       "package-lock.json",
+      "server/agent-server-auth.js",
+      "server/config.js",
       "server/index.js",
-      "public/index.html",
-    ]));
+      "server/tokens.js",
+    ]);
+    expect(artifact.files.some((file) => file.path.startsWith("public/"))).toBe(false);
     for (const file of artifact.files) expect(file.sha256).toMatch(/^[a-f0-9]{64}$/);
   });
 });

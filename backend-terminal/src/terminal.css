@@ -1,23 +1,25 @@
-:root {
+:host {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 20rem;
   color-scheme: dark;
   background: #06090d;
 }
 
-* { box-sizing: border-box; }
-html, body, #app { width: 100%; height: 100%; margin: 0; }
-body { overflow: hidden; background: #06090d; }
-
 .terminal-app {
+  box-sizing: border-box;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   width: 100%;
   height: 100%;
-  min-height: 18rem;
+  min-height: 20rem;
   overflow: hidden;
   background: #06090d;
 }
 
 .terminal-app__surface {
+  box-sizing: border-box;
   min-width: 0;
   min-height: 0;
   overflow: hidden;

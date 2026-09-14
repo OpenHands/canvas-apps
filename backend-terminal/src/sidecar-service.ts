@@ -157,11 +157,11 @@ PY`;
 
 const INSTALL_PREPARE_COMMAND = String.raw`set -eu
 app_dir='${APP_SUBPATH}'
-for checked in '.openhands' '.openhands/apps' "$app_dir" "$app_dir/server" "$app_dir/public" "$app_dir/public/assets" "$app_dir/run" "$app_dir/logs" "$app_dir/node_modules"; do [ ! -L "$checked" ] || { printf 'Sidecar path contains a symbolic link\n' >&2; exit 1; }; done
+for checked in '.openhands' '.openhands/apps' "$app_dir" "$app_dir/server" "$app_dir/run" "$app_dir/logs" "$app_dir/node_modules"; do [ ! -L "$checked" ] || { printf 'Sidecar path contains a symbolic link\n' >&2; exit 1; }; done
 command -v node >/dev/null 2>&1 || { printf 'Node.js 18 or newer is required\n' >&2; exit 1; }
 node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 18 ? 0 : 1)' || { printf 'Node.js 18 or newer is required\n' >&2; exit 1; }
 command -v npm >/dev/null 2>&1 || { printf 'npm is required\n' >&2; exit 1; }
-mkdir -p "$app_dir/server" "$app_dir/public/assets" "$app_dir/run" "$app_dir/logs"
+mkdir -p "$app_dir/server" "$app_dir/run" "$app_dir/logs"
 rm -f "$app_dir/.runtime-version" "$app_dir/.artifact-sha256"`;
 
 function installCommands(): string[] {

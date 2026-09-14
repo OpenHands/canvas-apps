@@ -25,13 +25,12 @@ const config: SidecarConfig = {
   maxSessions: 2,
   maxMessageBytes: 65_536,
   idleTimeoutMs: 60_000,
-  publicDir: "/definitely-not-a-real-public-directory",
 };
 
-async function issueCapability(origin = baseUrl, fetchSite = "same-origin"): Promise<Response> {
+async function issueCapability(origin = allowedOrigin): Promise<Response> {
   return fetch(`${baseUrl}/api/access-token`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Origin: origin, "Sec-Fetch-Site": fetchSite },
+    headers: { "Content-Type": "application/json", Origin: origin },
     body: JSON.stringify({ extension: "backend-terminal", extension_version: "0.2.0", backend_id: "test" }),
   });
 }
@@ -72,14 +71,48 @@ describe("PTY sidecar", () => {
   });
 
 
-  it("reports health and rejects cross-origin token issuance", async () => {
+  it("allows only configured Canvas origins to request capabilities", async () => {
     const health = await fetch(`${baseUrl}/api/health`).then((response) => response.json());
-    expect(health).toEqual({ status: "ok", version: "0.3.2", sessions: 0, max_sessions: 2 });
+    expect(health).toEqual({ status: "ok", version: "0.4.0", sessions: 0, max_sessions: 2 });
 
-    const denied = await issueCapability("http://evil.example", "cross-site");
+    const preflight = await fetch(`${baseUrl}/api/access-token`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: allowedOrigin,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "content-type",
+      },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("access-control-allow-origin")).toBe(allowedOrigin);
+    expect(preflight.headers.get("access-control-allow-methods")).toBe("POST, OPTIONS");
+    expect(preflight.headers.get("access-control-allow-headers")).toBe("Content-Type");
+
+    const allowed = await issueCapability();
+    expect(allowed.status).toBe(200);
+    expect(allowed.headers.get("access-control-allow-origin")).toBe(allowedOrigin);
+
+    const denied = await issueCapability("http://evil.example");
     expect(denied.status).toBe(403);
-    await expect(denied.json()).resolves.toEqual({ error: "same_origin_required" });
+    expect(denied.headers.get("access-control-allow-origin")).toBeNull();
+    await expect(denied.json()).resolves.toEqual({ error: "origin_not_allowed" });
   });
+
+  it("rejects terminal WebSockets from unconfigured origins", async () => {
+    const status = await new Promise<number>((resolvePromise, reject) => {
+      const webSocket = new WebSocket(`ws://127.0.0.1:${running.port}/api/terminal`, {
+        headers: { Origin: "http://evil.example" },
+      });
+      webSocket.on("unexpected-response", (_, response) => {
+        response.resume();
+        resolvePromise(response.statusCode ?? 0);
+      });
+      webSocket.on("open", () => reject(new Error("Unconfigured WebSocket origin was accepted.")));
+      webSocket.on("error", () => {});
+    });
+    expect(status).toBe(403);
+  });
+
 
   it("rejects an invalid Agent Server key before starting a PTY", async () => {
     const response = await issueCapability();
@@ -87,7 +120,7 @@ describe("PTY sidecar", () => {
 
     const result = await new Promise<{ code: number; ready: boolean }>((resolvePromise, reject) => {
       const webSocket = new WebSocket(`ws://127.0.0.1:${running.port}/api/terminal`, {
-        headers: { Origin: baseUrl },
+        headers: { Origin: allowedOrigin },
       });
       let ready = false;
       webSocket.on("open", () => webSocket.send(JSON.stringify({
@@ -114,7 +147,7 @@ describe("PTY sidecar", () => {
 
     const output = await new Promise<string>((resolvePromise, reject) => {
       const webSocket = new WebSocket(`ws://127.0.0.1:${running.port}/api/terminal`, {
-        headers: { Origin: baseUrl },
+        headers: { Origin: allowedOrigin },
       });
       let transcript = "";
       const timeout = setTimeout(() => {
@@ -152,7 +185,7 @@ describe("PTY sidecar", () => {
 
     const connect = (): Promise<number> => new Promise((resolvePromise, reject) => {
       const webSocket = new WebSocket(`ws://127.0.0.1:${running.port}/api/terminal`, {
-        headers: { Origin: baseUrl },
+        headers: { Origin: allowedOrigin },
       });
       webSocket.on("open", () => webSocket.send(JSON.stringify({ type: "auth", token: body.token, api_key: validApiKey })));
       webSocket.on("message", (raw) => {

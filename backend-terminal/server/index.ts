@@ -1,7 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { resolve } from "node:path";
 import express from "express";
 import * as pty from "node-pty";
 import { WebSocket, WebSocketServer } from "ws";
@@ -9,7 +7,7 @@ import { loadConfig, type SidecarConfig } from "./config.js";
 import { validateAgentServerKey } from "./agent-server-auth.js";
 import { CapabilityStore } from "./tokens.js";
 
-export const SIDECAR_VERSION = "0.3.2";
+export const SIDECAR_VERSION = "0.4.0";
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 const SHELL_ENV_KEYS = ["HOME", "USER", "LOGNAME", "PATH", "SHELL", "LANG", "LC_ALL", "TMPDIR"] as const;
 
@@ -24,16 +22,6 @@ export type RunningSidecar = {
   port: number;
   close(): Promise<void>;
 };
-
-function isSidecarOrigin(rawOrigin: string | undefined, rawHost: string | undefined): boolean {
-  if (!rawOrigin || !rawHost) return false;
-  try {
-    const origin = new URL(rawOrigin);
-    return (origin.protocol === "http:" || origin.protocol === "https:") && origin.host === rawHost;
-  } catch {
-    return false;
-  }
-}
 
 function validSize(value: unknown, maximum: number): value is number {
   return Number.isInteger(value) && Number(value) >= 2 && Number(value) <= maximum;
@@ -68,24 +56,34 @@ export async function startSidecar(config = loadConfig()): Promise<RunningSideca
   const capabilities = new CapabilityStore(config.tokenTtlMs);
   const sessions = new Set<WebSocket>();
   const processes = new Map<WebSocket, pty.IPty>();
-  const contentSecurityPolicy = [
-    "default-src 'self'",
-    "script-src 'self'",
-    "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data:",
-    "connect-src 'self' ws: wss:",
-    `frame-ancestors ${[...config.allowedOrigins].join(" ")}`,
-    "base-uri 'none'",
-    "form-action 'none'",
-  ].join("; ");
 
   app.disable("x-powered-by");
-  app.use((_, response, next) => {
-    response.setHeader("Content-Security-Policy", contentSecurityPolicy);
+  app.use((request, response, next) => {
+    const origin = request.get("origin");
+    if (origin && config.allowedOrigins.has(origin)) {
+      response.setHeader("Access-Control-Allow-Origin", origin);
+      response.setHeader("Vary", "Origin");
+    }
     response.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     response.setHeader("Referrer-Policy", "no-referrer");
     response.setHeader("X-Content-Type-Options", "nosniff");
     next();
+  });
+  app.options("/api/access-token", (request, response) => {
+    const origin = request.get("origin");
+    const requestedMethod = request.get("access-control-request-method");
+    const requestedHeaders = (request.get("access-control-request-headers") ?? "")
+      .split(",")
+      .map((header) => header.trim().toLowerCase())
+      .filter(Boolean);
+    if (!origin || !config.allowedOrigins.has(origin) || requestedMethod !== "POST" || requestedHeaders.some((header) => header !== "content-type")) {
+      response.status(403).json({ error: "preflight_not_allowed" });
+      return;
+    }
+    response.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    response.setHeader("Access-Control-Max-Age", "600");
+    response.status(204).end();
   });
   app.use(express.json({ limit: "16kb", strict: true }));
 
@@ -96,9 +94,8 @@ export async function startSidecar(config = loadConfig()): Promise<RunningSideca
 
   app.post("/api/access-token", (request, response) => {
     const origin = request.get("origin");
-    const sameSiteRequest = request.get("sec-fetch-site") === "same-origin" && isSidecarOrigin(origin, request.get("host"));
-    if (!sameSiteRequest) {
-      response.status(403).json({ error: "same_origin_required" });
+    if (!origin || !config.allowedOrigins.has(origin)) {
+      response.status(403).json({ error: "origin_not_allowed" });
       return;
     }
     const body: unknown = request.body;
@@ -119,23 +116,12 @@ export async function startSidecar(config = loadConfig()): Promise<RunningSideca
     response.json({ token: issued.token, expires_at: new Date(issued.expiresAt).toISOString() });
   });
 
-  if (existsSync(config.publicDir)) {
-    app.use(express.static(config.publicDir, { etag: true, index: "index.html", maxAge: 0 }));
-    app.use((request, response, next) => {
-      if (request.method !== "GET" || request.path.startsWith("/api/")) {
-        next();
-        return;
-      }
-      response.sendFile(resolve(config.publicDir, "index.html"));
-    });
-  }
-
   const server = createServer(app);
   const webSocketServer = new WebSocketServer({ noServer: true, maxPayload: config.maxMessageBytes });
 
   server.on("upgrade", (request, socket, head) => {
     const pathname = new URL(request.url ?? "/", "http://sidecar.invalid").pathname;
-    if (pathname !== "/api/terminal" || !isSidecarOrigin(request.headers.origin, request.headers.host)) {
+    if (pathname !== "/api/terminal" || !request.headers.origin || !config.allowedOrigins.has(request.headers.origin)) {
       socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
       socket.destroy();
       return;

@@ -1,10 +1,12 @@
 import { createServer } from "node:http";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
 import { startSidecar } from "../sidecar-dist/server/index.js";
 
 const canvasOrigin = "http://localhost:8000";
 const apiKey = "browser-smoke-agent-server-key";
+const extensionSource = await readFile(resolve(import.meta.dirname, "../extension.js"), "utf8");
 const agentServer = createServer((request, response) => {
   if (request.url?.startsWith("/api/conversations/search") && request.headers["x-session-api-key"] === apiKey) {
     response.writeHead(200, { "Content-Type": "application/json" }).end('{"items":[]}');
@@ -18,7 +20,7 @@ if (!agentAddress || typeof agentAddress === "string") throw new Error("Smoke Ag
 
 const running = await startSidecar({
   host: "127.0.0.1",
-  port: 0,
+  port: 18_080,
   allowedOrigins: new Set([canvasOrigin]),
   agentServerUrl: `http://127.0.0.1:${agentAddress.port}`,
   agentServerTimeoutMs: 1_000,
@@ -29,9 +31,7 @@ const running = await startSidecar({
   maxSessions: 2,
   maxMessageBytes: 65_536,
   idleTimeoutMs: 60_000,
-  publicDir: resolve(import.meta.dirname, "../sidecar-dist/public"),
 });
-const origin = `http://localhost:${running.port}`;
 const browser = await chromium.launch({
   headless: true,
   executablePath: process.env.CHROME_PATH || undefined,
@@ -45,39 +45,53 @@ try {
   page.on("requestfailed", (request) => pageErrors.push(`${request.url()}: ${request.failure()?.errorText ?? "request failed"}`));
   await page.route(`${canvasOrigin}/`, (route) => route.fulfill({
     contentType: "text/html",
-    body: `<!doctype html><body><script>
-      const frame = document.createElement("iframe");
-      frame.id = "terminal";
-      addEventListener("message", (event) => {
-        if (event.source !== frame.contentWindow || event.origin !== "${origin}") return;
-        if (event.data?.type === "backend-terminal:credentials-request") {
-          frame.contentWindow.postMessage({ type: "backend-terminal:credentials", requestId: event.data.requestId, apiKey: "${apiKey}" }, "${origin}");
-        } else if (event.data?.type === "backend-terminal:ready") {
-          window.terminalReady = true;
-        } else if (event.data?.type === "backend-terminal:error") {
-          window.terminalError = event.data.message;
-        }
-      });
-      frame.src = "${origin}/?canvas_origin=${encodeURIComponent(canvasOrigin)}&canvas_session=smoke";
-      document.body.append(frame);
-    </script>`,
+    body: '<main id="app"></main>',
   }));
   await page.goto(`${canvasOrigin}/`);
-  const terminalFrame = page.frameLocator("#terminal");
+  await page.evaluate(async ({ source, key }) => {
+    localStorage.setItem("openhands-active-backend", JSON.stringify({ backendId: "smoke-backend", orgId: null }));
+    localStorage.setItem("openhands-backends", JSON.stringify([
+      { id: "smoke-backend", name: "Smoke", host: "http://127.0.0.1:18000", apiKey: key, kind: "local" },
+    ]));
+    const blobUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+    const module = await import(blobUrl);
+    let mountPage;
+    module.activate({
+      apiVersion: "1",
+      extension: { name: "backend-terminal", version: "0.4.0", resolvedRef: "smoke" },
+      backend: { id: "smoke-backend", kind: "local", orgId: null },
+      agentServer: {
+        async request(request) {
+          if (request.path === "/api/file/home") return { home: "/root" };
+          const probe = { state: "ready", version: "0.4.0", nodeVersion: "v22.0.0", npmVersion: "10.0.0", supported: true, message: null };
+          return { exit_code: 0, stdout: `BACKEND_TERMINAL_PROBE\t${btoa(JSON.stringify(probe))}\n`, stderr: "" };
+        },
+      },
+      registerPage(id, mount) {
+        if (id !== "terminal") throw new Error(`Unexpected page ID: ${id}`);
+        mountPage = mount;
+        return () => {};
+      },
+    });
+    if (typeof mountPage !== "function") throw new Error("Terminal page was not registered.");
+    window.disposeTerminal = mountPage({ container: document.querySelector("#app"), path: "" });
+  }, { source: extensionSource, key: apiKey });
+
+  const textarea = page.locator(".terminal-shell__mount .xterm-helper-textarea");
   try {
-    await page.waitForFunction(() => window.terminalReady === true, undefined, { timeout: 5_000 });
+    await textarea.waitFor({ timeout: 5_000 });
+    await textarea.focus();
+    await page.keyboard.type("printf '__SIDECAR_BROWSER_OK__\\n'; exit 0");
+    await page.keyboard.press("Enter");
+    await page.locator(".terminal-shell__mount .xterm-rows").filter({ hasText: "__SIDECAR_BROWSER_OK__" }).waitFor({ timeout: 10_000 });
   } catch (error) {
-    const connectionError = await page.evaluate(() => window.terminalError || "unavailable");
-    const frameCount = await page.locator("#terminal").count();
-    const frameUrls = page.frames().map((frame) => frame.url()).join(", ");
-    throw new Error(`Terminal did not connect (error: ${connectionError}; iframe count: ${frameCount}; frames: ${frameUrls}; page errors: ${pageErrors.join("; ") || "none"})`, { cause: error });
+    const terminalError = await page.locator(".terminal-shell__mount [role=alert]").textContent().catch(() => "unavailable");
+    throw new Error(`Bundled terminal did not complete PTY smoke (error: ${terminalError}; page errors: ${pageErrors.join("; ") || "none"})`, { cause: error });
   }
-  await terminalFrame.locator(".xterm-helper-textarea").focus();
-  await page.keyboard.type("printf '__SIDECAR_BROWSER_OK__\\n'; exit 0");
-  await page.keyboard.press("Enter");
-  await terminalFrame.locator(".xterm-rows").filter({ hasText: "__SIDECAR_BROWSER_OK__" }).waitFor({ timeout: 10_000 });
+  if (await page.locator("iframe").count()) throw new Error("Bundled terminal unexpectedly rendered an iframe.");
   if (pageErrors.length > 0) throw new Error(`Browser errors: ${pageErrors.join("; ")}`);
-  console.log("Sidecar browser smoke passed through Agent Server auth and a real PTY session.");
+  await page.evaluate(() => window.disposeTerminal?.());
+  console.log("Bundled extension browser smoke passed through CORS, Agent Server auth, and a real PTY session.");
 } finally {
   await browser.close();
   await running.close();

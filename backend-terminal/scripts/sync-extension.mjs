@@ -18,7 +18,7 @@ if (!/export\s*\{[^}]*\bactivate\b[^}]*\}/s.test(source) && !/export\s+(?:async\
 if (/(?:^|\n)\s*import\s+(?!["']data:)/m.test(source) || /\bimport\s*\(/.test(source)) {
   throw new Error("The built entrypoint contains an unresolved import.");
 }
-if (/\b(?:require\s*\(|module\.exports|process\.env|__dirname|__filename|node:)/.test(source)) {
+if (/\b(?:require\s*\(|module\.exports|process\.env|__dirname|__filename)/.test(source) || /["']node:[^"']+["']/.test(source)) {
   throw new Error("The built entrypoint contains a Node runtime dependency.");
 }
 

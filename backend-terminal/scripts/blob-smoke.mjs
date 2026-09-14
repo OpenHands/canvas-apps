@@ -14,22 +14,48 @@ try {
     contentType: "text/html",
     body: '<main id="app"></main>',
   }));
-  await page.route("http://canvas.test/terminal-sidecar/**", (route) => route.fulfill({
-    contentType: "text/html",
-    body: `<!doctype html><title>Sidecar smoke</title><script>
-      addEventListener("message", (event) => {
-        if (event.origin === "http://canvas.test" && event.data?.type === "backend-terminal:credentials") {
-          window.receivedKey = event.data.apiKey;
-        }
-      });
-      parent.postMessage({ type: "backend-terminal:credentials-request", requestId: "blob-smoke" }, "http://canvas.test");
-    </script>`,
-  }));
   await page.goto("http://canvas.test/");
-  const result = await page.evaluate(async (extensionSource) => {
+  const result = await page.evaluate(async ({ extensionSource, token }) => {
     const blobUrl = URL.createObjectURL(new Blob([extensionSource], { type: "text/javascript" }));
     let mountPage;
     let unregistered = false;
+    let capabilityRequest;
+    const sockets = [];
+
+    class SmokeWebSocket extends EventTarget {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSED = 3;
+      readyState = SmokeWebSocket.CONNECTING;
+      sent = [];
+      constructor(url) {
+        super();
+        this.url = String(url);
+        sockets.push(this);
+      }
+      open() {
+        this.readyState = SmokeWebSocket.OPEN;
+        this.dispatchEvent(new Event("open"));
+      }
+      send(data) { this.sent.push(data); }
+      close(code = 1000, reason = "") {
+        this.readyState = SmokeWebSocket.CLOSED;
+        const event = new Event("close");
+        Object.defineProperties(event, { code: { value: code }, reason: { value: reason } });
+        this.dispatchEvent(event);
+      }
+    }
+
+    const realFetch = window.fetch;
+    const RealWebSocket = window.WebSocket;
+    window.fetch = async (input, init) => {
+      capabilityRequest = { url: String(input), body: String(init?.body ?? ""), credentials: init?.credentials };
+      return new Response(JSON.stringify({ token, expires_at: new Date(Date.now() + 30_000).toISOString() }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    window.WebSocket = SmokeWebSocket;
 
     try {
       localStorage.setItem("openhands-active-backend", JSON.stringify({ backendId: "smoke-backend", orgId: null }));
@@ -39,12 +65,12 @@ try {
       const module = await import(blobUrl);
       const host = {
         apiVersion: "1",
-        extension: { name: "backend-terminal", version: "0.3.2", resolvedRef: "smoke" },
+        extension: { name: "backend-terminal", version: "0.4.0", resolvedRef: "smoke" },
         backend: { id: "smoke-backend", kind: "local", orgId: null },
         agentServer: {
           async request(request) {
             if (request.path === "/api/file/home") return { home: "/root" };
-            const probe = { state: "ready", version: "0.3.2", nodeVersion: "v22.0.0", npmVersion: "10.0.0", supported: true, message: null };
+            const probe = { state: "ready", version: "0.4.0", nodeVersion: "v22.0.0", npmVersion: "10.0.0", supported: true, message: null };
             return { exit_code: 0, stdout: `BACKEND_TERMINAL_PROBE\t${btoa(JSON.stringify(probe))}\n`, stderr: "" };
           },
         },
@@ -59,48 +85,44 @@ try {
       if (typeof mountPage !== "function") throw new Error("Page was not registered.");
       const container = document.querySelector("#app");
       const disposeMount = mountPage({ container, path: "" });
-      const iframeDeadline = Date.now() + 2_000;
-      while (!container.querySelector("iframe") && Date.now() < iframeDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-      const iframe = container.querySelector("iframe");
-      const iframeUrl = new URL(iframe?.src ?? "about:blank");
-      if (`${iframeUrl.origin}${iframeUrl.pathname}` !== "http://canvas.test/terminal-sidecar/") {
-        throw new Error(`Unexpected sidecar iframe URL: ${iframe?.src}`);
-      }
-      if (iframeUrl.searchParams.get("canvas_origin") !== location.origin) throw new Error("Canvas origin binding is missing.");
-      if (!iframe.sandbox.contains("allow-scripts")) throw new Error("Sidecar iframe scripts are not allowed.");
-      if (container.querySelector("header, form, input, button, footer")) throw new Error("Terminal chrome was rendered.");
-      const errorRegion = container.querySelector('[role="alert"]');
-      if (!errorRegion?.hidden || errorRegion.textContent) throw new Error("Initial error region is not empty and hidden.");
-      const iframeOrigin = iframeUrl.origin;
       const deadline = Date.now() + 2_000;
-      while (iframe.contentWindow.receivedKey !== "blob-smoke-backend-key" && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
+      while ((!container.querySelector(".terminal-shell__mount") || sockets.length === 0) && Date.now() < deadline) {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
       }
-      if (iframe.contentWindow.receivedKey !== "blob-smoke-backend-key") throw new Error("Backend key was not delivered to the iframe.");
+      const terminalMount = container.querySelector(".terminal-shell__mount");
+      if (!terminalMount?.shadowRoot?.querySelector(".xterm")) throw new Error("Bundled xterm did not render in the shadow root.");
+      if (container.querySelector("iframe")) throw new Error("Terminal rendered an iframe.");
+      if (sockets.length !== 1) throw new Error("Terminal WebSocket was not created.");
+      sockets[0].open();
+      const auth = JSON.parse(sockets[0].sent[0] ?? "{}");
+      if (auth.api_key !== "blob-smoke-backend-key" || auth.token !== token) throw new Error("WebSocket auth did not contain the selected backend key and capability.");
+      if (capabilityRequest?.url !== "http://canvas.test/terminal-sidecar/api/access-token") throw new Error(`Unexpected capability URL: ${capabilityRequest?.url}`);
+      if (capabilityRequest?.credentials !== "omit") throw new Error("Capability request did not omit ambient credentials.");
+      if (capabilityRequest?.body.includes("blob-smoke-backend-key")) throw new Error("Backend key leaked into the capability request.");
 
       disposeMount();
-      if (container.childElementCount !== 0) throw new Error("Mount cleanup left DOM behind.");
+      if (container.childElementCount !== 0 || terminalMount.shadowRoot.childElementCount !== 0) throw new Error("Mount cleanup left DOM behind.");
       disposeActivation();
       if (!unregistered) throw new Error("Activation cleanup did not unregister the page.");
 
       const disposeNested = mountPage({ container, path: "anything" });
       const nestedDeadline = Date.now() + 2_000;
-      while (!container.querySelector("iframe") && Date.now() < nestedDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
+      while (!container.querySelector(".terminal-shell__mount") && Date.now() < nestedDeadline) {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
       }
-      if (!container.querySelector("iframe") || container.querySelector("header, form, input, button, footer")) {
-        throw new Error("Nested page path did not render only the terminal.");
+      if (!container.querySelector(".terminal-shell__mount") || container.querySelector("iframe, header, form, input, button, footer")) {
+        throw new Error("Nested page path did not render only the bundled terminal.");
       }
       disposeNested();
-      return { iframeOrigin };
+      return { socketUrl: sockets[0].url, shadowRoot: true };
     } finally {
+      window.fetch = realFetch;
+      window.WebSocket = RealWebSocket;
       URL.revokeObjectURL(blobUrl);
     }
-  }, source);
+  }, { extensionSource: source, token: "b".repeat(32) });
 
-  console.log(`Blob smoke passed with isolated sidecar origin ${result.iframeOrigin}.`);
+  console.log(`Blob smoke passed with bundled shadow DOM and ${result.socketUrl}.`);
 } finally {
   await browser.close();
 }

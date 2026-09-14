@@ -1,7 +1,6 @@
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { normalizeAgentServerUrl } from "./agent-server-auth.js";
 
 export type SidecarConfig = {
@@ -17,7 +16,6 @@ export type SidecarConfig = {
   maxSessions: number;
   maxMessageBytes: number;
   idleTimeoutMs: number;
-  publicDir: string;
 };
 
 function integer(value: string | undefined, fallback: number, minimum: number, maximum: number, name: string): number {
@@ -66,6 +64,5 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SidecarConfig 
     maxSessions: integer(env.TERMINAL_MAX_SESSIONS, 4, 1, 32, "TERMINAL_MAX_SESSIONS"),
     maxMessageBytes: integer(env.TERMINAL_MAX_MESSAGE_BYTES, 65_536, 1_024, 1_048_576, "TERMINAL_MAX_MESSAGE_BYTES"),
     idleTimeoutMs: integer(env.TERMINAL_IDLE_TIMEOUT_MS, 1_800_000, 60_000, 86_400_000, "TERMINAL_IDLE_TIMEOUT_MS"),
-    publicDir: resolve(env.TERMINAL_PUBLIC_DIR ?? fileURLToPath(new URL("../public", import.meta.url))),
   };
 }

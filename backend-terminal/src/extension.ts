@@ -1,5 +1,6 @@
 import { artifact, discoverHome, installSidecar, probeSidecar, runtimeDirectory, startSidecar, type SidecarProbe } from "./sidecar-service";
 import styles from "./styles.css?inline";
+import { mountBundledTerminal } from "./terminal";
 import type { CanvasHost, PageContext } from "./types";
 
 function defaultSidecarUrl(): string {
@@ -14,19 +15,19 @@ type StoredBackend = {
   kind: string;
 };
 
-function backendApiKey(): string | null {
+function backendApiKey(expectedBackendId: string): string | null {
   try {
     const selected: unknown = JSON.parse(localStorage.getItem("openhands-active-backend") ?? "null");
     const backends: unknown = JSON.parse(localStorage.getItem("openhands-backends") ?? "[]");
     if (
       typeof selected !== "object" || selected === null ||
-      !("backendId" in selected) || typeof selected.backendId !== "string" ||
+      !("backendId" in selected) || selected.backendId !== expectedBackendId ||
       !Array.isArray(backends)
     ) return null;
 
     const backend = backends.find((value): value is StoredBackend => (
       typeof value === "object" && value !== null &&
-      "id" in value && value.id === selected.backendId &&
+      "id" in value && value.id === expectedBackendId &&
       "kind" in value && value.kind === "local" &&
       "apiKey" in value && typeof value.apiKey === "string"
     ));
@@ -47,70 +48,18 @@ function element<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-function mountTerminal(container: HTMLElement): () => void {
+function mountTerminal(container: HTMLElement, backendId: string): () => void {
+  const apiKey = backendApiKey(backendId);
+  if (!apiKey) throw new Error("Canvas has no valid API key for the active local backend.");
+
   const root = element("section", "terminal-shell");
-  const iframe = element("iframe", "terminal-shell__frame") as HTMLIFrameElement;
-  const error = element("div", "terminal-shell__error");
-  error.hidden = true;
-  error.setAttribute("role", "alert");
-  error.setAttribute("aria-live", "assertive");
-  iframe.title = "Interactive backend terminal";
-  iframe.setAttribute("sandbox", "allow-scripts allow-same-origin");
-  iframe.referrerPolicy = "no-referrer";
-  root.append(iframe, error);
+  const terminalMount = element("div", "terminal-shell__mount");
+  root.append(terminalMount);
   container.append(root);
-
-  const sidecarUrl = defaultSidecarUrl();
-  const frameOrigin = new URL(sidecarUrl).origin;
-  const target = new URL(`${sidecarUrl}/`);
-  target.searchParams.set("canvas_origin", location.origin);
-  target.searchParams.set("canvas_session", String(Date.now()));
-  iframe.src = target.href;
-
-  function showError(message = ""): void {
-    error.textContent = message;
-    error.hidden = message.length === 0;
-  }
-
-  const onMessage = (event: MessageEvent): void => {
-    if (
-      event.source !== iframe.contentWindow ||
-      event.origin !== frameOrigin ||
-      typeof event.data !== "object" ||
-      event.data === null ||
-      !("type" in event.data)
-    ) return;
-    if (
-      event.data.type === "backend-terminal:credentials-request" &&
-      "requestId" in event.data && typeof event.data.requestId === "string" && event.data.requestId.length <= 128
-    ) {
-      const apiKey = backendApiKey();
-      if (!apiKey) {
-        const message = "Canvas has no active local backend API key.";
-        showError(message);
-        iframe.contentWindow?.postMessage({
-          type: "backend-terminal:credentials-error",
-          requestId: event.data.requestId,
-          message,
-        }, frameOrigin);
-        return;
-      }
-      iframe.contentWindow?.postMessage({
-        type: "backend-terminal:credentials",
-        requestId: event.data.requestId,
-        apiKey,
-      }, frameOrigin);
-    } else if (event.data.type === "backend-terminal:ready") {
-      showError();
-    } else if (event.data.type === "backend-terminal:error" && "message" in event.data && typeof event.data.message === "string") {
-      showError(event.data.message);
-    }
-  };
-  window.addEventListener("message", onMessage);
+  const disposeTerminal = mountBundledTerminal(terminalMount, defaultSidecarUrl(), apiKey, backendId);
 
   return () => {
-    window.removeEventListener("message", onMessage);
-    iframe.src = "about:blank";
+    disposeTerminal();
     root.remove();
   };
 }
@@ -270,10 +219,10 @@ function mountPage(host: CanvasHost, context: PageContext): () => void {
       const probe = await probeSidecar(host, home);
       if (disposed) return;
       if (probe.state === "ready") {
-        replaceContent(() => mountTerminal(context.container));
+        replaceContent(() => mountTerminal(context.container, host.backend.id));
       } else {
         replaceContent(() => mountSetup(host, context.container, home, probe, () => {
-          replaceContent(() => mountTerminal(context.container));
+          replaceContent(() => mountTerminal(context.container, host.backend.id));
         }));
       }
     } catch (caught) {

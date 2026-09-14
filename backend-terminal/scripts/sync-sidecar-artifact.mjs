@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { readdir, readFile, writeFile } from "node:fs/promises";
-import { basename, relative, resolve } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { relative, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
 const runtime = resolve(root, "runtime");
@@ -15,10 +15,7 @@ const paths = [
   "sidecar-dist/server/config.js",
   "sidecar-dist/server/index.js",
   "sidecar-dist/server/tokens.js",
-  "sidecar-dist/public/index.html",
 ];
-const assets = await readdir(resolve(root, "sidecar-dist/public/assets"));
-for (const asset of assets.sort()) paths.push(`sidecar-dist/public/assets/${asset}`);
 
 const files = [];
 const combined = createHash("sha256");
@@ -40,4 +37,4 @@ const artifact = {
   files,
 };
 await writeFile(resolve(runtime, "artifact.json"), `${JSON.stringify(artifact, null, 2)}\n`);
-console.log(`Wrote ${relative(root, resolve(runtime, "artifact.json"))} (${files.length} files, ${basename(assets[0] ?? "no assets")}).`);
+console.log(`Wrote ${relative(root, resolve(runtime, "artifact.json"))} (${files.length} files).`);
