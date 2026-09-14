@@ -47,7 +47,15 @@ export class Backend {
     if (status.runtime != null) validateRuntime(status.runtime);
     return status;
   }
-  install(integration) { return this.command({ action: 'install', confirmed: true, integration, ...PACKAGE }); }
+  async install(integration) {
+    const options = { confirmed: true, integration, sha256: PACKAGE.sha256 };
+    for (let offset = 0; offset < PACKAGE.archive.length; offset += 32768) {
+      const chunk = PACKAGE.archive.slice(offset, offset + 32768);
+      const result = await this.command({ action: 'stage', ...options, offset, chunk });
+      if (result.received !== offset + chunk.length) throw new Error('Incomplete backend upload; retry installation');
+    }
+    return this.command({ action: 'install', ...options });
+  }
   start() { return this.command({ action: 'start' }); }
   stop() { return this.command({ action: 'stop' }); }
   async request(path, method = 'GET', body, options = {}) {

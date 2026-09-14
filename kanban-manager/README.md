@@ -66,7 +66,12 @@ sidecar's bearer token. Empty integrations still permit manual board use.
 The portable host API has no custom-backend proxy. The App instead discovers
 `/api/file/home` and sends fixed, structured base64/JSON commands through the
 existing authenticated `/api/bash/execute_bash_command` endpoint. A local
-allowlisted HTTP bridge talks to FastAPI. User text never becomes shell source.
+allowlisted HTTP bridge talks to FastAPI. User text never becomes shell source. Approved backend package uploads use
+32 KiB base64 chunks (4 MiB encoded-package limit) in private `staging/` files
+before checksum verification and installation; no single command embeds the
+whole package. A retry starts its upload over, and successful extraction removes
+the staged file. Existing data and integration configuration stay unchanged
+until the verified package is ready to install.
 **Browser data traffic still uses `execute_bash_command`**; the local HTTP hop is
 not a browser-to-sidecar HTTP proxy. Verified against Agent Server **1.46.0**
 (`/server_info`, `/openapi.json`): Apps routes cover installation, inventory,

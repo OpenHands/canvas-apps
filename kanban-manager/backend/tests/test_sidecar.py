@@ -56,6 +56,39 @@ class SidecarTest(unittest.TestCase):
         self.assertFalse((self.home / '.openhands').exists())
         self.assertIn('port', json.loads(result.stdout)['error'].lower())
 
+    def test_backend_package_staging_is_bounded_validated_and_private(self):
+        encoded = base64.b64encode(bytes(range(256)) * 400).decode()
+        digest = hashlib.sha256(base64.b64decode(encoded)).hexdigest()
+        root = self.home / '.openhands/apps/kanban-manager'
+
+        def stage(offset=0, chunk=encoded[:32768], **options):
+            payload = dict(action='stage', confirmed=True, sha256=digest,
+                offset=offset, chunk=chunk, integration={})
+            payload.update(options)
+            result = subprocess.run([sys.executable, str(ROOT / 'sidecar/bootstrap.py'),
+                base64.b64encode(json.dumps(payload).encode()).decode()], cwd=self.home,
+                env={**os.environ, 'HOME': str(self.home)}, capture_output=True, text=True)
+            return result.returncode, json.loads(result.stdout)
+
+        for invalid in [dict(confirmed=False), dict(sha256='../unsafe'),
+                        dict(chunk='bad!'), dict(chunk=encoded[:32772]),
+                        dict(offset=-1), dict(integration={'agent_server': 'http://localhost:broken'})]:
+            code, response = stage(**invalid)
+            self.assertNotEqual(code, 0, response)
+            self.assertFalse(root.exists())
+        for offset in range(0, len(encoded), 32768):
+            code, response = stage(offset, encoded[offset:offset + 32768])
+            self.assertEqual(code, 0, response)
+            self.assertEqual(response['received'], min(offset + 32768, len(encoded)))
+        staged = root / 'staging' / (digest + '.b64')
+        self.assertEqual(staged.read_text(), encoded)
+        self.assertEqual(staged.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(root.stat().st_mode & 0o777, 0o700)
+        self.assertNotEqual(stage(10)[0], 0)
+        self.assertEqual(staged.read_text(), encoded)
+        self.assertFalse((root / 'current.json').exists())
+        self.assertFalse((root / 'integration.json').exists())
+
     def test_migration_idempotence_and_transaction(self):
         from sidecar.migrate import import_legacy
         report = import_legacy(self.app, self.legacy)

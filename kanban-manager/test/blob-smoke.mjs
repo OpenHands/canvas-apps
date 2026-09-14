@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import puppeteer from 'puppeteer-core';
 import { fixture } from './fixture.mjs';
@@ -74,7 +74,44 @@ try {
   assert.equal(await page.$('#board'), null);
   assert.equal(await page.$('#vibe-ext-style'), null);
   assert.deepEqual(errors, []);
-  console.log('Chromium Blob smoke: no onboarding flash on mount/remount, conversation routes, submit, drawer, append, 75KB attachment, disposal passed');
+  const empty = fixture({ installed: false });
+  const staged = [];
+  try {
+    await page.exposeFunction('kanbanEmptyRequest', async request => {
+      if (request.body?.command) {
+        const payload = JSON.parse(Buffer.from(request.body.command.split(' ').at(-1), 'base64').toString());
+        if (payload.action === 'stage') staged.push(payload.chunk.length);
+        if (payload.action === 'install') {
+          // Corrupt actual staged bytes to test verification without downloading dependencies.
+          const path = join(empty.home, '.openhands/apps/kanban-manager/staging', payload.sha256 + '.b64');
+          const content = readFileSync(path, 'utf8');
+          writeFileSync(path, 'AAAA' + content.slice(4));
+        }
+      }
+      return empty.request(request);
+    });
+    await page.evaluate(async text => {
+      const url = URL.createObjectURL(new Blob([text], { type: 'text/javascript' }));
+      const app = await import(url); URL.revokeObjectURL(url);
+      window.deactivate = app.activate({ apiVersion: '1', backend: { id: 'empty-fixture', kind: 'local' },
+        agentServer: { request: window.kanbanEmptyRequest },
+        registerPage(id, mount) {
+          window.dispose = mount({ container: document.querySelector('#app'), path: '', navigate() {} });
+          return () => {};
+        }, navigate() {},
+      });
+    }, readFileSync(new URL('../extension.js', import.meta.url), 'utf8'));
+    await page.waitForSelector('.backend-setup fieldset:not([disabled])');
+    assert.deepEqual(readdirSync(empty.home), []);
+    assert.equal(await page.$eval('.backend-actions button', button => button.disabled), true);
+    await page.click('.backend-setup > label input[type=checkbox]');
+    await page.click('.backend-actions button:first-child');
+    await page.waitForFunction(() => document.querySelector('.backend-error')?.textContent.includes('checksum mismatch'), { timeout: 30000 });
+    assert.ok(staged.length > 1 && staged.every(size => size <= 32768));
+    assert.ok(!readdirSync(join(empty.home, '.openhands/apps/kanban-manager')).includes('current.json'));
+    await page.evaluate(() => { window.dispose(); window.deactivate(); });
+  } finally { empty.stop(); }
+  console.log('Chromium Blob smoke: no onboarding flash on mount/remount, conversation routes, submit, drawer, append, 75KB attachment, bounded installer upload/checksum, disposal passed');
 } finally {
   await browser.close();
   await new Promise(resolve => server.close(resolve));

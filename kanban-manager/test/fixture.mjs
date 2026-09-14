@@ -27,6 +27,7 @@ export function fixture({ installed = true, canvasBase = 'https://canvas.example
       requests.push(request);
       if (request.path === '/api/file/home') return { home };
       if (request.path !== '/api/bash/execute_bash_command') throw new Error(`Unexpected transport ${request.path}`);
+      if (Buffer.byteLength(request.body.command) >= 128 * 1024) throw new Error('Command exceeds Linux single-argument limit');
       if (request.body.cwd !== home) throw new Error('Backend isolation violated');
       try {
         const { stdout, stderr } = await execute('/bin/sh', ['-c', request.body.command], {
