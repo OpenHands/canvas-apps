@@ -1,126 +1,157 @@
 # Kanban Manager
 
-Kanban Manager is a board for agent work. You queue requests as cards, a
-manager agent picks them up and dispatches workers, and the board shows what
-each agent is doing right now and what has landed.
+An App for Agent Canvas: queue requests, let a manager dispatch workers, watch
+live progress, and review finished work. The React App has an installable
+**FastAPI sidecar** and a shared **SQLite** database on the selected Agent Server.
 
-It is a Canvas Extension with no server of its own. Everything it needs — the
-board, its settings, ticket attachments — is JSON on the Agent Server's own
-filesystem, written through the file API.
+The existing board interactions, workspace settings, manager chat, attachments,
+agent budgets, light/dark themes and ten primary palettes are preserved.
 
-(Previously published here as `vibe-board`.)
+## Install and onboard
 
-## Lanes
+In Agent Canvas, use **Add app** with:
 
-Cards move left to right: **Pending** → **In progress** → **Needs input** →
-**Finished**, plus a **Verified** lane you can toggle for the archive. Drag a
-card to reprioritise within a lane. Click one to open a drawer with the full
-append-only history; adding a note to a finished ticket reopens it.
+- App source: `github:DevinVinson/canvas-apps`
+- Repository path: `kanban-manager`
+- Ref: the release/branch containing this version
 
-In-progress cards show the worker's most recent action as it happens, so you
-can see an agent working without opening its conversation.
+Enable the trusted App, then open **Kanban Manager**. Its route is still
+`/extensions/kanban-manager/board`; `/<workspace-name>` opens a project directly.
+Installation and enablement are separate. Fresh installation does not start the
+backend or run an installer.
 
-## The manager
+The first view performs a read-only probe. Python 3.10+ with `venv`, pip and
+standard-library SQLite must be available on the **Agent Server machine**.
+The sidecar supports POSIX hosts (Linux/macOS); it is not a Windows service.
+If prerequisites are missing, use the displayed agent-assisted setup prompt
+rather than allowing the App to guess a system package manager.
 
-The control in the top right owns the manager automation for the selected
-workspace, so a board can be made autonomous without leaving Canvas:
+### Backend setup
 
-- **Start manager** (orange) — there is no manager yet, or it was stopped.
-  Clicking it packs the automation's python sources (compiled into the bundle,
-  `src/automation/`) plus a per-workspace `config.json` into a `tar.gz`,
-  uploads it to `POST /api/automation/v1/uploads`, and creates a cron
-  automation that runs `python3 main.py` once a minute. The automation id is
-  recorded on the workspace.
-- **manager ✓ / working / ✗** — a manager is running. The badge reports the
-  last run and the manager conversation; clicking it triggers a run now.
-- **Stop manager** — `PATCH {"enabled": false}`. The automation and its run
-  history are kept, so starting again is a re-enable with a fresh tarball.
+The App explains the package checksum, private data directory, dependency
+downloads and background process. After acknowledgment, **Install backend**:
 
-Two implementation notes, since neither is obvious:
+1. Verifies the bundled backend archive's SHA-256 and extracts an immutable
+   release under `~/.openhands/apps/kanban-manager/releases/<sha256>/`.
+2. Runs `python3 -m venv <app-data>/venv`.
+3. Runs `<app-data>/venv/bin/python -m pip --isolated install --index-url
+   https://pypi.org/simple -r <release>/requirements.txt` with pinned FastAPI,
+   Uvicorn, HTTPX and websockets versions. Nothing is installed globally.
+4. Starts FastAPI on a random loopback-only port with a random bearer token.
 
-- The tar archive is built in the browser and gzipped with
-  `CompressionStream`. Sizes in the ustar header must be **byte** counts, not
-  string lengths, or a file with any multi-byte character truncates and every
-  following header lands mid-stream.
-- The upload is a plain `fetch` rather than `host.agentServer.request`,
-  because the host client JSON-stringifies any body that is not `FormData`,
-  which would corrupt the gzip bytes. Every other call goes through the host.
+Setup is asynchronous and reports progress on **Recheck**. **Repair / update
+backend** installs new packaged code/dependencies without deleting the database,
+attachments or backups. **Start backend**, **Stop backend**, and **Recheck** are
+separate controls. Installation is serialized across tabs.
 
-Without a manager the board is still a perfectly good manual kanban: you can
-create, edit, reorder and verify tickets, and open the conversation behind any
-card.
+The backend stays running after browser closure or App disablement so scheduled
+managers still have a board. No systemd/launchd service is installed. After a
+host restart, use **Start backend**; managers cannot access the board while the
+sidecar is stopped. Logs live at `install.log` and `service.log` in App data.
 
-## How it stores state
+### Integration configuration
 
-There is no database and no backend process. The store is a directory tree
-under the Agent Server's home:
+Supply deployment-specific **Agent Server URL** and **Automation API URL**
+(including its `/api/automation` prefix). These are different services; the App
+does not infer them from the Canvas browser origin or assume an ingress proxy.
+The Agent Server URL may be suggested from the backend's `AGENT_SERVER_URL`.
 
+Credentials are read only on the backend. Enter absolute credential **file
+paths**, never keys, in the setup form. Alternatively the backend can inherit
+`SESSION_API_KEY` / `OH_SESSION_API_KEYS_0` and
+`OPENHANDS_AUTOMATION_API_KEY`. Configuration persists as private
+`integration.json`; the browser never receives credential values or the
+sidecar's bearer token. Empty integrations still permit manual board use.
+
+The portable host API has no custom-backend proxy. The App instead discovers
+`/api/file/home` and sends fixed, structured base64/JSON commands through the
+existing authenticated `/api/bash/execute_bash_command` endpoint. A local
+allowlisted HTTP bridge talks to FastAPI. User text never becomes shell source.
+There are **no agent-server file-API board reads/writes**. Attachment uploads and
+downloads use 32 KiB chunks to stay within command/response limits and preserve
+binary bytes; files remain capped at 25 MiB.
+
+## Existing boards and migration
+
+Old Canvas boards are detected at `~/.openhands/vibe-manager/`. The App will not
+silently open an empty replacement board when that store exists.
+
+Close every older Kanban App tab, approve migration, and choose **Migrate /
+finish cutover**. This pauses the existing automations, waits for active runs
+and manager conversations to finish, backs up source documents and destination
+SQLite, then imports either `board.json` or per-ticket files transactionally.
+Workspace/ticket/entry/attachment IDs, timestamps, settings, ordering,
+conversation links and automation IDs are preserved. Unknown fields are retained
+in SQLite's `legacy_records` table. Missing attachments or conflicting IDs stop
+the migration rather than silently discarding data.
+
+Manager CLIs are redirected to the sidecar, automation tarballs are refreshed,
+and their original enabled/disabled states are restored. A busy run returns an
+instruction to wait and retry; it is not forcibly terminated. Failures retain a
+`cutover.json` checkpoint and leave managers paused until cutover is finished.
+
+Original JSON and attachment files are not deleted. An unchanged migration is
+idempotent and never overwrites newer SQLite edits. Late legacy writes trigger a
+visible warning (checked every 30 seconds); reconcile those preserved records
+before continuing. Do not reset the migration ledger or resume old JSON writers
+after cutover. Backups are private and must never be committed or published.
+
+The older standalone website has a **separate SQLite database**. This migration
+does not overwrite or merge that database or alter its service. It remains
+available for a separately planned import/cutover; conflicting independent
+histories must not be silently combined.
+
+## State and ownership
+
+```text
+<agent-server-home>/.openhands/apps/kanban-manager/
+├── vibe.db                 # SQLite WAL: workspaces, tickets, entries, metadata
+├── attachments/            # stable paths readable by workers on this host
+├── backups/                # original documents and pre-import database
+├── bin/<workspace-id>/     # manager CLI, isolated workspace configuration
+├── releases/<sha256>/      # packaged Python backend and automation source
+├── venv/                   # private Python dependencies
+├── integration.json        # URLs and credential paths, not browser state
+├── current.json            # selected backend release
+├── run.json                # private PID/port/bearer token; never sent to browser
+├── cutover.json            # migration checkpoint and automation enabled states
+└── install.json, install.log, service.log
 ```
-~/.openhands/vibe-manager/
-  index.json                                  workspaces + settings
-  workspaces/<id>/tickets/<tid>/ticket.json   one file per ticket
-  attachments/<id>/<filename>                 uploaded files
+
+The App data root is mode 0700. Backend files inherit private permissions;
+runtime/config state is mode 0600. App disable/uninstall does not remove this
+persistent state. There is intentionally no one-click data deletion control.
+
+## Development and verification
+
+This is an independent package, not a shared Canvas runtime. React owns the App
+and onboarding lifecycle; the mature board controller is mounted through a
+React effect and fully disposed on unmount. `src/store.js`, `live.js`,
+`manager.js` and `managerchat.js` are small backend API adapters.
+
+```sh
+npm ci
+CHROME_PATH=/path/to/chrome npm run check
+python backend/tests/test_sidecar.py
 ```
 
-The directory keeps its old name so boards created by earlier installs — and
-by the manager automation, which writes the same files from the shell — are
-still found.
+Build emits exactly one self-contained `dist/extension.js`, validates it, then
+copies the verified artifact to checked-in `extension.js`. Dependencies, scoped
+CSS, onboarding bootstrap and backend archive are embedded; no bare imports or
+external runtime chunks are required. Python dependencies from
+`backend/requirements.txt` must be available for the real-path tests. In the
+source repository they live at the repository root instead of `backend/`.
 
-Reads are `GET /api/file/download`, writes are `POST /api/file/upload`, both
-through the host's `agentServer.request` so they are same-origin and
-authenticated by Canvas. The home directory is resolved at runtime from
-`GET /api/file/home` rather than assumed, so this works whatever user the
-Agent Server runs as.
+Checks exercise activation/routes/disposal and the real fixed bridge → FastAPI
+→ SQLite path. Chromium imports the actual artifact from a Blob URL and tests
+submission, keyboard drawer access, appending entries and a multi-chunk binary
+attachment. The only substituted boundary is Canvas's host interface; service
+responses are not mocked. The source repository additionally tests migrations,
+concurrent writes, authentication, restart persistence and legacy CLI routing.
 
-Two consequences worth knowing:
-
-- **One file per ticket is what keeps writers apart.** There is no conditional
-  upload to build a compare-and-swap on, so the extension, the manager
-  automation and the manager's CLI would lose each other's edits if they all
-  rewrote one board document. Touching separate files, they cannot. The two
-  documents still shared — `index.json`, and a ticket two writers both target —
-  carry a `rev`/`writer` pair that detects a lost write and re-applies it.
-- **Reads bypass the HTTP cache.** The file API sends `ETag`/`Last-Modified`
-  but no `Cache-Control`, so a browser may reuse a stale response for its
-  heuristic freshness window. On the directory listing that assembles the
-  board, that means a ticket created moments earlier never appears at all.
-  Both the listing and `readJson` defeat it per request; attachment blobs are
-  immutable and stay cacheable.
-
-## Build
-
-The checked-in `extension.js` is the built bundle; the sources are in `src/`.
-
-```bash
-npm install
-npm run check     # build + test
-```
-
-`build.mjs` bundles the ES modules with esbuild and inlines two things that
-must travel with a single-file extension:
-
-- `src/board.css`, scoping every selector under `.vibe-ext` and rewriting
-  `rem` lengths onto a local `--vibe-rem`, so the board can size itself
-  without restyling Canvas;
-- `src/automation/*.py`, the manager automation, because "Start manager"
-  uploads it from the browser and the machine running Canvas has no checkout
-  of it to read.
-
-Both are vendored from [rbren/vibe-manager](https://github.com/rbren/vibe-manager),
-which is where they are maintained. The bundle's destination comes from the
-manifest's `entrypoint`, so the declared and built paths cannot drift.
-
-## Tests
-
-`test/extension.test.js` mounts the built bundle against a linkedom DOM and a
-fake host, and covers rendering, lane sorting, the submit path, the manager
-start/stop control and disposal. It runs on the bundle rather than the
-sources, so a broken build fails the suite.
-
-`test/manager.test.mjs` checks the browser-built tarball with real GNU tar. It
-also has two tests that talk to a running automation backend; they skip unless
-a session key is available (`OH_SESSION_API_KEYS_0`, plus `VIBE_TEST_INGRESS`
-if it is not on `http://127.0.0.1:8000`).
-
-The upstream repository additionally has tests that drive the real Agent Server
-file API; those need a running server and are not included here.
+Local acceptance: install this package from its absolute backend-local path,
+enable, onboard, open the board, exercise a nested workspace route, reload,
+disable/re-enable, and verify that the same data remains. Reinstall the UI and
+use **Repair / update backend** after backend changes. Refresh existing manager
+automation tarballs while preserving enabled states. Never restart Agent Server
+just to deploy Kanban Manager; doing so interrupts worker conversations.

@@ -40,6 +40,9 @@ WORKSPACE_PATH = CONFIG["workspace_path"]
 WORKSPACE_NAME = CONFIG["workspace_name"]
 CANVAS_BASE = CONFIG["canvas_base"].rstrip("/")
 
+if CONFIG.get("sidecar_root"):
+    os.environ.setdefault("VIBE_SIDECAR_ROOT", CONFIG["sidecar_root"])
+
 if CONFIG.get("store_dir"):
     os.environ.setdefault("VIBE_STORE_DIR", CONFIG["store_dir"])
 

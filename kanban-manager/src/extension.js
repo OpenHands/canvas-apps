@@ -1,20 +1,4 @@
-/* vibe — agent dispatch board, as an Agent Canvas extension.
-
-   This is the SPA from static/app.js adapted to the extension ABI. The three
-   structural differences from the standalone build:
-
-   1. Scoping. The SPA owns a whole document and looks elements up with
-      document.querySelector; here every lookup is rooted at the container
-      Canvas hands us, so two mounts can never collide and we never touch
-      Canvas's DOM.
-   2. Lifecycle. Everything that outlives a statement - timers, listeners,
-      in-flight fetches - is registered with a disposer, because Canvas mounts
-      and unmounts us repeatedly (enable/disable, route changes, backend
-      switches) and cleanup is our responsibility.
-   3. Routing. The SPA owns location.pathname (/workspace/<name>); an extension
-      page only owns the remainder below its declared path, and navigates
-      through the host so Canvas's base path keeps working.
-*/
+/* Board interaction controller, mounted and disposed by the React App. */
 
 import { BOARD_MARKUP } from "./markup.js";
 import {
@@ -27,7 +11,6 @@ import { Live } from "./live.js";
 import { Manager } from "./manager.js";
 import { ManagerChat } from "./managerchat.js";
 
-const HOST_API_VERSION = "1";
 // Canvas routes extension pages at /extensions/<extension>/<declared page path>.
 const PAGE_ROOT = "/extensions/kanban-manager/board";
 const STYLE_ELEMENT_ID = "vibe-ext-style";
@@ -66,7 +49,7 @@ const CHAT_AUTHOR = { user: "you", assistant: "manager" };
    unstyled content. */
 let styleRefCount = 0;
 
-function acquireStyle() {
+export function acquireStyle() {
   styleRefCount += 1;
   let el = document.getElementById(STYLE_ELEMENT_ID);
   if (!el) {
@@ -214,10 +197,14 @@ export function mountBoard({ container, path, navigate, host }) {
     chatReturnFocus: null,
   };
 
+  function storageGet(key) {
+    return localStorage.getItem(`kanban-manager:${host.backend.id}:${key}`) ?? localStorage.getItem(key);
+  }
+
   function readTheme() {
     try {
-      const hint = localStorage.getItem("vibe.theme.hint")
-        ?? localStorage.getItem("vibe.theme");
+      const hint = storageGet("vibe.theme.hint")
+        ?? storageGet("vibe.theme");
       return hint === "light" ? "light" : "dark";
     } catch {
       return "dark";
@@ -226,7 +213,7 @@ export function mountBoard({ container, path, navigate, host }) {
 
   function persist(key, value) {
     try {
-      localStorage.setItem(key, value);
+      localStorage.setItem(`kanban-manager:${host.backend.id}:${key}`, value);
     } catch {
       /* storage disabled - preference just won't survive a reload */
     }
@@ -257,14 +244,12 @@ export function mountBoard({ container, path, navigate, host }) {
   /** Open the store on this Canvas backend's agent server. */
   async function connect() {
     try {
-      // Resolving the root proves the file API is reachable and writable
-      // before the board starts polling it.
+      // The sidecar owns storage and integrations; Canvas only transports RPC.
       await state.store.storeRoot();
     } catch (e) {
       if (!alive()) return false;
       showSetup(
-        `Couldn't reach the agent server's file API (${e.message}). ` +
-          "The board is stored on the agent server, so it needs to be running.",
+        `Couldn't reach the Kanban backend (${e.message}). Open Backend setup to recheck or start it.`,
       );
       return false;
     }
@@ -449,7 +434,7 @@ export function mountBoard({ container, path, navigate, host }) {
 
   function readWorkspacePref() {
     try {
-      return localStorage.getItem("vibe.workspace") ?? "";
+      return storageGet("vibe.workspace") ?? "";
     } catch {
       return "";
     }
@@ -460,7 +445,7 @@ export function mountBoard({ container, path, navigate, host }) {
      so Canvas's base path and history stay authoritative. */
   function workspaceNameFromRoute(remainder) {
     const first = (remainder || "").split("/")[0];
-    return first ? decodeURIComponent(first) : null;
+    try { return first ? decodeURIComponent(first) : null; } catch { return remainder; }
   }
 
   function workspacePathFromName(name) {
@@ -483,7 +468,7 @@ export function mountBoard({ container, path, navigate, host }) {
     if (!path) {
       state.ws = null;
       try {
-        localStorage.removeItem("vibe.workspace");
+        localStorage.removeItem(`kanban-manager:${host.backend.id}:vibe.workspace`);
       } catch {
         /* storage disabled */
       }
@@ -526,9 +511,7 @@ export function mountBoard({ container, path, navigate, host }) {
       if (!alive() || state.store.writes !== writes) return;
       state.ws = data.workspace;
       adoptWorkspacePrefs();
-      /* The old service computed these server-side; inside Canvas they come
-         from the agent server directly, cached and refreshed in the
-         background so a 5s poll never blocks on them. */
+      // Telemetry arrives with the board from the backend's shared caches.
       state.tickets = state.live.decorate(data.tickets, "");
       const listed = state.workspaces.selected.find(
         (workspace) => workspace.id === state.ws.id,
@@ -625,9 +608,7 @@ export function mountBoard({ container, path, navigate, host }) {
     try {
       const automationId = await state.manager.ensure(state.ws);
       if (!alive()) return;
-      state.ws = await state.store.updateWorkspace(state.ws.id, {
-        automation_id: automationId,
-      });
+      state.ws = { ...state.ws, automation_id: automationId };
       state.automation = null;
     } catch (e) {
       if (alive()) console.error(`manager start failed: ${e.message}`);
@@ -642,7 +623,7 @@ export function mountBoard({ container, path, navigate, host }) {
     if (!state.ws?.automation_id || button.classList.contains("working")) return;
     button.classList.add("working");
     try {
-      await state.manager.stop(state.ws.automation_id);
+      await state.manager.stop(state.ws);
     } catch (e) {
       if (alive()) console.error(`manager stop failed: ${e.message}`);
     }
@@ -1339,7 +1320,7 @@ export function mountBoard({ container, path, navigate, host }) {
       const d = await state.chatClient.messages(chat.conversationId, chat.cursor);
       if (!alive() || state.chat !== chat) return;
       chat.cursor = d.cursor ?? chat.cursor;
-      chat.status = state.live.conversationStatus(chat.conversationId);
+      chat.status = d.status;
       if (d.latestAction) chat.action = d.latestAction;
       if (d.messages.length) chat.messages.push(...d.messages);
     } catch (e) {
@@ -1642,16 +1623,14 @@ export function mountBoard({ container, path, navigate, host }) {
       $("#workspace-select").value = target;
       await selectWorkspace(target, { historyMode: "none" });
     } else {
-      if (routeName) console.error(`unknown workspace: ${routeName}`);
+      if (routeName) { showSetup(`Unknown workspace: ${routeName}. Choose a workspace from the picker.`); return; }
       render();
     }
   }
 
   wire();
 
-  /* No configuration step: the board lives on the agent server this Canvas
-     backend is already connected to. connect() renders the setup screen
-     itself if the file API can't be reached, with the reason. */
+  /* The React onboarding view has verified the backend before mounting. */
   connect();
   /* After connect() so the store root is still the first request: the profiles
      are workspace-independent, so one fetch fills the request-settings picker
@@ -1669,17 +1648,4 @@ export function mountBoard({ container, path, navigate, host }) {
     }
     root.remove();
   };
-}
-
-/* -------------------------------------------------------------- activate */
-
-export function activate(host) {
-  if (host.apiVersion !== HOST_API_VERSION) {
-    throw new Error(
-      `kanban-manager requires Canvas host API ${HOST_API_VERSION}, got ${host.apiVersion}.`,
-    );
-  }
-  // The page id is written as a literal (rather than the PAGE_ID constant) so
-  // static validators can match it against the manifest.
-  return host.registerPage("board", (context) => mountBoard({ ...context, host }));
 }

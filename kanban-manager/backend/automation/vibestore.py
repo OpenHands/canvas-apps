@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import json
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -36,6 +37,28 @@ def store_root() -> Path:
     return Path.home() / ".openhands" / "vibe-manager"
 
 
+def sidecar_root() -> Path | None:
+    configured = os.environ.get("VIBE_SIDECAR_ROOT")
+    if configured:
+        return Path(configured)
+    marker = store_root() / "sidecar.json"
+    if marker.is_file():
+        return Path(json.loads(marker.read_text())["root"])
+    return None
+
+
+def sidecar_request(path, method="GET", body=None):
+    root = sidecar_root()
+    current = json.loads((root / "current.json").read_text())
+    spec = importlib.util.spec_from_file_location("kanban_runtime", Path(current["source"]) / "sidecar/runtime.py")
+    runtime = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runtime)
+    response = runtime.rpc(root, {"path": path, "method": method, "body": body})
+    if response["status"] >= 400:
+        raise RuntimeError(str(response["body"]))
+    return response["body"]
+
+
 def now() -> float:
     return time.time()
 
@@ -56,7 +79,7 @@ def install_cli(workspace_id: str, workspace_path: str) -> str:
     with "ticket not found".
     """
     src = Path(__file__).parent
-    bin_dir = store_root() / "bin" / workspace_id
+    bin_dir = (sidecar_root() or store_root()) / "bin" / workspace_id
     bin_dir.mkdir(parents=True, exist_ok=True)
     for name in ("vibestore.py", "vibectl.py"):
         shutil.copy2(src / name, bin_dir / name)
@@ -67,6 +90,7 @@ def install_cli(workspace_id: str, workspace_path: str) -> str:
         "workspace_id": workspace_id,
         "workspace_path": workspace_path,
         "store_dir": str(store_root()),
+        "sidecar_root": str(sidecar_root()) if sidecar_root() else None,
     }, indent=2))
     # Retire the shared config a manager conversation from before this change
     # may still be pointed at: without it that CLI reports a missing workspace
@@ -91,6 +115,8 @@ def _read_json(path: Path, fallback):
 
 
 def _write_json(path: Path, payload) -> None:
+    if sidecar_root():
+        raise RuntimeError("JSON writes are retired; use the Kanban sidecar API")
     path.parent.mkdir(parents=True, exist_ok=True)
     # Write-then-rename: a crash mid-write must not truncate the board.
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -144,6 +170,8 @@ def index_path() -> Path:
 
 
 def read_index() -> dict:
+    if sidecar_root():
+        return {"workspaces": sidecar_request("/api/workspaces")["selected"]}
     return _read_json(index_path(), {"version": 1, "workspaces": []})
 
 
@@ -159,6 +187,8 @@ def mutate_index(mutate):
 
 
 def get_workspace(ws_id: str) -> dict | None:
+    if sidecar_root():
+        return snapshot(ws_id)["workspace"]
     for ws in read_index().get("workspaces", []):
         if ws.get("id") == ws_id:
             return ws
@@ -199,6 +229,8 @@ def read_board(ws_id: str) -> dict:
     Falls back to a pre-split board.json so a workspace that has not been
     migrated yet still reads correctly.
     """
+    if sidecar_root():
+        return snapshot(ws_id)
     directory = tickets_dir(ws_id)
     if not directory.is_dir():
         board = _read_json(
@@ -262,6 +294,8 @@ def mutate_ticket(ws_id: str, ticket_id: str, mutate):
 
 def snapshot(ws_id: str) -> dict:
     """Board in the shape the old /api/manager/.../snapshot endpoint returned."""
+    if sidecar_root():
+        return sidecar_request(f"/api/manager/workspaces/{ws_id}/snapshot")
     return {"workspace": get_workspace(ws_id), "tickets": read_board(ws_id)["tickets"]}
 
 
@@ -301,6 +335,12 @@ def patch_ticket(
     if status is not None and status not in STATUSES:
         raise ValueError(f"bad status {status!r}; expected one of {list(STATUSES)}")
 
+    if sidecar_root():
+        get_ticket(ws_id, ticket_id)
+        fields = {k: v for k, v in dict(status=status, title=title,
+            conversation_id=conversation_id, pr_url=pr_url, manager_note=manager_note,
+            dispatched_entry_count=dispatched_entry_count, append_entry=append_entry).items() if v is not None}
+        return sidecar_request(f"/api/manager/tickets/{ticket_id}", "PATCH", fields)
     stamp = now()
 
     def mutate(ticket: dict) -> dict:
@@ -405,6 +445,8 @@ def agent_request(path: str, method: str = "GET", data: dict | None = None,
 
 def llm_profiles() -> dict:
     """Available LLM profiles, without secrets."""
+    if sidecar_root():
+        return sidecar_request("/api/manager/llm-profiles")
     try:
         data = agent_request("/api/profiles", timeout=15)
     except (urllib.error.URLError, OSError, json.JSONDecodeError):
@@ -570,6 +612,11 @@ def start_conversation(
     A ticket's own model selection wins over `llm_profile`: what the user
     picked on the request is what the worker runs on.
     """
+    if sidecar_root():
+        return sidecar_request("/api/manager/conversations", "POST", dict(
+            working_dir=working_dir, prompt=prompt, title=title, llm_profile=llm_profile,
+            conversation_id=conversation_id, role=role, worktree=worktree,
+            max_iterations=max_iterations, ticket_id=ticket_id))
     llm_profile = ticket_llm_profile(ws_id, ticket_id) or llm_profile
     if conversation_id:
         if llm_profile:
