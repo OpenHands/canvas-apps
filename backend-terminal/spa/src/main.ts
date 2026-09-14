@@ -60,20 +60,10 @@ const app = document.querySelector<HTMLElement>("#app");
 if (!app) throw new Error("Missing SPA root element.");
 
 app.innerHTML = `
-  <section class="terminal-app" aria-labelledby="terminal-title">
-    <header class="terminal-app__header">
-      <div>
-        <p class="terminal-app__eyebrow">PTY sidecar</p>
-        <h1 id="terminal-title">Interactive Terminal</h1>
-      </div>
-      <div class="terminal-app__actions">
-        <span class="terminal-app__status" role="status" aria-live="polite">Connecting…</span>
-        <button class="terminal-app__button" type="button">New session</button>
-      </div>
-    </header>
+  <main class="terminal-app">
     <div class="terminal-app__surface" aria-label="Terminal session"></div>
-    <p class="terminal-app__notice">This is a real shell on the sidecar host. Closing this view terminates the session.</p>
-  </section>
+    <div class="terminal-app__error" role="alert" aria-live="assertive" hidden></div>
+  </main>
 `;
 
 function required<T extends Element>(root: ParentNode, selector: string): T {
@@ -83,8 +73,7 @@ function required<T extends Element>(root: ParentNode, selector: string): T {
 }
 
 const surface = required<HTMLElement>(app, ".terminal-app__surface");
-const status = required<HTMLElement>(app, ".terminal-app__status");
-const newSession = required<HTMLButtonElement>(app, ".terminal-app__button");
+const errorRegion = required<HTMLElement>(app, ".terminal-app__error");
 const canvasOrigin = expectedCanvasOrigin();
 const terminal = new Terminal({
   allowProposedApi: false,
@@ -120,9 +109,9 @@ let socket: WebSocket | undefined;
 let authenticated = false;
 let disposed = false;
 
-function setStatus(text: string, tone: "normal" | "working" | "error" = "normal"): void {
-  status.textContent = text;
-  status.dataset.tone = tone;
+function showError(message = ""): void {
+  errorRegion.textContent = message;
+  errorRegion.hidden = message.length === 0;
 }
 
 function parseMessage(raw: unknown): ServerMessage | null {
@@ -148,12 +137,6 @@ function send(payload: object): void {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
 }
 
-function requestNewSession(): void {
-  socket?.close(1000, "new session requested");
-  parent.postMessage({ type: "backend-terminal:reconnect" }, canvasOrigin);
-  setStatus("Requesting a new session from Canvas…", "working");
-}
-
 async function connect(): Promise<void> {
   try {
     let apiKey = await requestBackendApiKey(canvasOrigin);
@@ -172,7 +155,6 @@ async function connect(): Promise<void> {
     socket.addEventListener("open", () => {
       send({ type: "auth", token: tokenBody.token, api_key: apiKey, cols: terminal.cols, rows: terminal.rows });
       apiKey = "";
-      setStatus("Authenticating…", "working");
     });
     socket.addEventListener("message", (event) => {
       const message = parseMessage(event.data);
@@ -182,34 +164,32 @@ async function connect(): Promise<void> {
       }
       if (message.type === "ready") {
         authenticated = true;
-        setStatus("Connected");
+        showError();
         parent.postMessage({ type: "backend-terminal:ready" }, canvasOrigin);
         terminal.focus();
       } else if (message.type === "output") {
         terminal.write(message.data);
       } else if (message.type === "exit") {
         terminal.writeln(`\r\n\x1b[90m[process exited with code ${message.exitCode}]\x1b[0m`);
-        setStatus("Shell exited");
       } else if (message.type === "error") {
         terminal.writeln(`\r\n\x1b[31m[${message.message}]\x1b[0m`);
-        setStatus("Sidecar error", "error");
+        showError(message.message);
       }
     });
     socket.addEventListener("close", (event) => {
       apiKey = "";
       authenticated = false;
-      if (disposed) return;
-      const detail = event.reason || `code ${event.code}`;
-      setStatus(`Disconnected: ${detail}`, event.code === 1000 ? "normal" : "error");
+      if (disposed || event.code === 1000) return;
+      showError(`Disconnected: ${event.reason || `code ${event.code}`}`);
     });
     socket.addEventListener("error", () => {
       apiKey = "";
-      setStatus("WebSocket connection failed", "error");
+      showError("WebSocket connection failed.");
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Sidecar connection failed.";
     terminal.writeln(`\x1b[31m${message}\x1b[0m`);
-    setStatus(message, "error");
+    showError(message);
     parent.postMessage({ type: "backend-terminal:error", message }, canvasOrigin);
   }
 }
@@ -220,7 +200,6 @@ terminal.onData((data) => {
 terminal.onResize(({ cols, rows }) => {
   if (authenticated) send({ type: "resize", cols, rows });
 });
-newSession.addEventListener("click", requestNewSession);
 
 const resizeObserver = new ResizeObserver(() => {
   try { fitAddon.fit(); } catch { /* hidden iframe */ }

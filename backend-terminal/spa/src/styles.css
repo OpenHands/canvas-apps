@@ -1,56 +1,37 @@
 :root {
   color-scheme: dark;
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   background: #06090d;
 }
 
 * { box-sizing: border-box; }
 html, body, #app { width: 100%; height: 100%; margin: 0; }
-body { overflow: hidden; color: #e6edf5; background: #06090d; }
-button { font: inherit; }
+body { overflow: hidden; background: #06090d; }
 
 .terminal-app {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 0.65rem;
+  grid-template-rows: minmax(0, 1fr) auto;
   width: 100%;
   height: 100%;
   min-height: 18rem;
-  padding: 0.85rem;
-  background: radial-gradient(circle at 90% -10%, #182739, #06090d 28rem);
+  overflow: hidden;
+  background: #06090d;
 }
 
-.terminal-app__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
+.terminal-app__surface {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0.5rem;
 }
 
-.terminal-app__eyebrow {
-  margin: 0 0 0.1rem;
-  color: #5eead4;
-  font-size: 0.68rem;
-  font-weight: 800;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-}
-
-h1 { margin: 0; font-size: 1rem; }
-.terminal-app__actions { display: flex; align-items: center; gap: 0.65rem; }
-.terminal-app__status { color: #93a4b8; font-size: 0.76rem; }
-.terminal-app__status[data-tone="working"] { color: #fde047; }
-.terminal-app__status[data-tone="error"] { color: #fb7185; }
-.terminal-app__button { padding: 0.38rem 0.65rem; border: 1px solid #314158; border-radius: 0.45rem; color: #e6edf5; background: #121923; cursor: pointer; }
-.terminal-app__button:hover { border-color: #5eead4; }
-.terminal-app__button:focus-visible { outline: 2px solid #5eead4; outline-offset: 2px; }
-.terminal-app__surface { min-width: 0; min-height: 0; overflow: hidden; padding: 0.6rem; border: 1px solid #263246; border-radius: 0.6rem; background: #06090d; box-shadow: inset 0 0 2rem rgb(0 0 0 / 0.4); }
 .terminal-app__surface .xterm { height: 100%; }
 .terminal-app__surface .xterm-viewport { scrollbar-color: #34445a #0b1017; }
-.terminal-app__notice { margin: 0; color: #7f90a5; font-size: 0.7rem; }
 
-@media (max-width: 560px) {
-  .terminal-app { padding: 0.55rem; }
-  .terminal-app__header { align-items: flex-start; flex-direction: column; gap: 0.45rem; }
-  .terminal-app__actions { width: 100%; justify-content: space-between; }
+.terminal-app__error {
+  padding: 0.55rem 0.75rem;
+  color: #fecdd3;
+  background: #4c0519;
+  font: 13px/1.4 ui-sans-serif, system-ui, sans-serif;
 }
+
+.terminal-app__error[hidden] { display: none; }

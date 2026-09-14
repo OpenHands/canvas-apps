@@ -37,7 +37,7 @@ npm run build
 npm start
 ```
 
-The server refuses to start outside a root process by default, listens on `http://127.0.0.1:18080`, and starts shells in root's home directory. Local HTTP Canvas sessions default to a hostname-matched direct loopback URL. Hosted Canvas sessions default to `<canvas-origin>/terminal-sidecar`, which should be an authenticated reverse-proxy path to port 18080. The URL remains editable in the app.
+The server refuses to start outside a root process by default, listens on `http://127.0.0.1:18080`, and starts shells in root's home directory. Local HTTP Canvas sessions use a hostname-matched direct loopback URL. Hosted Canvas sessions use `<canvas-origin>/terminal-sidecar`, which should be an authenticated reverse-proxy path to port 18080. The frontend is an edge-to-edge terminal with a connection-error strip and no runtime configuration controls.
 
 ### Configuration
 

@@ -50,8 +50,13 @@ try {
       const frame = document.createElement("iframe");
       frame.id = "terminal";
       addEventListener("message", (event) => {
-        if (event.source === frame.contentWindow && event.origin === "${origin}" && event.data?.type === "backend-terminal:credentials-request") {
+        if (event.source !== frame.contentWindow || event.origin !== "${origin}") return;
+        if (event.data?.type === "backend-terminal:credentials-request") {
           frame.contentWindow.postMessage({ type: "backend-terminal:credentials", requestId: event.data.requestId, apiKey: "${apiKey}" }, "${origin}");
+        } else if (event.data?.type === "backend-terminal:ready") {
+          window.terminalReady = true;
+        } else if (event.data?.type === "backend-terminal:error") {
+          window.terminalError = event.data.message;
         }
       });
       frame.src = "${origin}/?canvas_origin=${encodeURIComponent(canvasOrigin)}&canvas_session=smoke";
@@ -61,12 +66,12 @@ try {
   await page.goto(`${canvasOrigin}/`);
   const terminalFrame = page.frameLocator("#terminal");
   try {
-    await terminalFrame.getByRole("status").filter({ hasText: "Connected" }).waitFor({ timeout: 5_000 });
+    await page.waitForFunction(() => window.terminalReady === true, undefined, { timeout: 5_000 });
   } catch (error) {
-    const status = await terminalFrame.getByRole("status").textContent().catch(() => "unavailable");
+    const connectionError = await page.evaluate(() => window.terminalError || "unavailable");
     const frameCount = await page.locator("#terminal").count();
     const frameUrls = page.frames().map((frame) => frame.url()).join(", ");
-    throw new Error(`Terminal did not connect (status: ${status}; iframe count: ${frameCount}; frames: ${frameUrls}; page errors: ${pageErrors.join("; ") || "none"})`, { cause: error });
+    throw new Error(`Terminal did not connect (error: ${connectionError}; iframe count: ${frameCount}; frames: ${frameUrls}; page errors: ${pageErrors.join("; ") || "none"})`, { cause: error });
   }
   await terminalFrame.locator(".xterm-helper-textarea").focus();
   await page.keyboard.type("printf '__SIDECAR_BROWSER_OK__\\n'; exit 0");

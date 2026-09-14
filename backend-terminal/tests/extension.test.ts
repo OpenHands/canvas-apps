@@ -69,54 +69,55 @@ describe("Backend Terminal sidecar extension", () => {
     expect(iframeUrl.searchParams.get("canvas_origin")).toBe(location.origin);
     expect(iframeUrl.searchParams.get("canvas_session")).toBe("1234");
     expect(iframe.getAttribute("sandbox")).toContain("allow-scripts");
-    expect(container.textContent).toContain("root PTY");
+    expect(container.querySelector("input")).toBeNull();
+    expect(container.querySelector("button")).toBeNull();
+    expect((container.querySelector('[role="alert"]') as HTMLElement).hidden).toBe(true);
 
     dispose?.();
     expect(container.childElementCount).toBe(0);
   });
 
-  it("persists valid custom URLs and rejects unsafe values", () => {
-    vi.spyOn(Date, "now").mockReturnValue(5678);
+  it("ignores stale sidecar URL settings and exposes no configuration UI", () => {
+    localStorage.setItem("backend-terminal.sidecar-url", "https://terminal.example.test/sidecar");
     const harness = createHarness();
     activate(harness.host);
     const container = document.createElement("div");
-    harness.mount()({ container, path: "" });
+    const dispose = harness.mount()({ container, path: "" });
 
-    const input = container.querySelector('input[name="sidecar-url"]') as HTMLInputElement;
-    input.value = "https://terminal.example.test/sidecar/";
-    container.querySelector("form")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     const iframeUrl = new URL((container.querySelector("iframe") as HTMLIFrameElement).src);
-    expect(`${iframeUrl.origin}${iframeUrl.pathname}`).toBe("https://terminal.example.test/sidecar/");
-    expect(iframeUrl.searchParams.get("canvas_origin")).toBe(location.origin);
-    expect(iframeUrl.searchParams.get("canvas_session")).toBe("5678");
-    expect(localStorage.getItem("backend-terminal.sidecar-url")).toBe("https://terminal.example.test/sidecar");
-
-    input.value = "file:///tmp/terminal";
-    container.querySelector("form")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    expect(container.textContent).toContain("must use HTTP or HTTPS");
+    expect(iframeUrl.origin).toBe("http://localhost:18080");
+    expect(container.querySelector("form")).toBeNull();
+    expect(container.textContent).toBe("");
+    dispose?.();
   });
 
-  it("accepts status messages only from the configured iframe origin", () => {
-    vi.spyOn(Date, "now").mockReturnValue(9012);
+  it("shows errors only from the configured iframe origin", () => {
     const harness = createHarness();
     activate(harness.host);
     const container = document.createElement("div");
     const dispose = harness.mount()({ container, path: "" });
     const iframe = container.querySelector("iframe") as HTMLIFrameElement;
-    const status = container.querySelector('[role="status"]') as HTMLElement;
+    const error = container.querySelector('[role="alert"]') as HTMLElement;
 
     window.dispatchEvent(new MessageEvent("message", {
       source: iframe.contentWindow,
       origin: "http://evil.example",
-      data: { type: "backend-terminal:ready" },
+      data: { type: "backend-terminal:error", message: "untrusted" },
     }));
-    expect(status.textContent).toContain("Loading");
+    expect(error.hidden).toBe(true);
+    window.dispatchEvent(new MessageEvent("message", {
+      source: iframe.contentWindow,
+      origin: "http://localhost:18080",
+      data: { type: "backend-terminal:error", message: "connection failed" },
+    }));
+    expect(error.hidden).toBe(false);
+    expect(error.textContent).toBe("connection failed");
     window.dispatchEvent(new MessageEvent("message", {
       source: iframe.contentWindow,
       origin: "http://localhost:18080",
       data: { type: "backend-terminal:ready" },
     }));
-    expect(status.textContent).toBe("Interactive terminal ready.");
+    expect(error.hidden).toBe(true);
 
     dispose?.();
     window.dispatchEvent(new MessageEvent("message", {
@@ -186,21 +187,18 @@ describe("Backend Terminal sidecar extension", () => {
       requestId: "request-cloud",
       message: "Canvas has no active local backend API key.",
     }, "http://localhost:18080");
-    expect(container.textContent).toContain("No active local backend API key");
+    expect(container.textContent).toBe("Canvas has no active local backend API key.");
     dispose?.();
   });
 
-  it("renders help and unknown nested routes", () => {
+  it("renders only the terminal for nested page paths", () => {
     const harness = createHarness();
     activate(harness.host);
     const container = document.createElement("div");
+    const dispose = harness.mount()({ container, path: "anything" });
 
-    const disposeHelp = harness.mount()({ container, path: "help" });
-    expect(container.textContent).toContain("validates it live with Agent Server");
-    disposeHelp?.();
-    const disposeMissing = harness.mount()({ container, path: "missing" });
-    expect(container.textContent).toContain("Route not found");
-    expect(container.textContent).toContain("missing");
-    disposeMissing?.();
+    expect(container.querySelector("iframe")).not.toBeNull();
+    expect(container.textContent).toBe("");
+    dispose?.();
   });
 });

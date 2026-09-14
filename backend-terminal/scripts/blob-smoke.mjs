@@ -59,7 +59,9 @@ try {
       }
       if (iframeUrl.searchParams.get("canvas_origin") !== location.origin) throw new Error("Canvas origin binding is missing.");
       if (!iframe.sandbox.contains("allow-scripts")) throw new Error("Sidecar iframe scripts are not allowed.");
-      if (!container.textContent.includes("root PTY")) throw new Error("Root authority warning is missing.");
+      if (container.querySelector("header, form, input, button, footer")) throw new Error("Terminal chrome was rendered.");
+      const errorRegion = container.querySelector('[role="alert"]');
+      if (!errorRegion?.hidden || errorRegion.textContent) throw new Error("Initial error region is not empty and hidden.");
       const iframeOrigin = iframeUrl.origin;
       const deadline = Date.now() + 2_000;
       while (iframe.contentWindow.receivedKey !== "blob-smoke-backend-key" && Date.now() < deadline) {
@@ -72,12 +74,11 @@ try {
       disposeActivation();
       if (!unregistered) throw new Error("Activation cleanup did not unregister the page.");
 
-      const disposeHelp = mountPage({ container, path: "help" });
-      if (!container.textContent.includes("validates it live with Agent Server")) throw new Error("Help route did not render.");
-      disposeHelp();
-      const disposeMissing = mountPage({ container, path: "missing" });
-      if (!container.textContent.includes("Route not found")) throw new Error("Unknown route did not render.");
-      disposeMissing();
+      const disposeNested = mountPage({ container, path: "anything" });
+      if (!container.querySelector("iframe") || container.querySelector("header, form, input, button, footer")) {
+        throw new Error("Nested page path did not render only the terminal.");
+      }
+      disposeNested();
       return { iframeOrigin };
     } finally {
       URL.revokeObjectURL(blobUrl);
