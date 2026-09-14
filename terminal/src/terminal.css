@@ -29,11 +29,16 @@
 .terminal-app__surface .xterm { height: 100%; }
 .terminal-app__surface .xterm-viewport { scrollbar-color: #34445a #0b1017; }
 
-.terminal-app__error {
+.terminal-app__status {
   padding: 0.55rem 0.75rem;
-  color: #fecdd3;
-  background: #4c0519;
+  color: #93a4b8;
+  background: #111720;
   font: 13px/1.4 ui-sans-serif, system-ui, sans-serif;
 }
 
-.terminal-app__error[hidden] { display: none; }
+.terminal-app__status--error {
+  color: #fecdd3;
+  background: #4c0519;
+}
+
+.terminal-app__status[hidden] { display: none; }

@@ -1,6 +1,5 @@
 node_modules/
 dist/
-sidecar-dist/
 playwright-report/
 test-results/
 .DS_Store
