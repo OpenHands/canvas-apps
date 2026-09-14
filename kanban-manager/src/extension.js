@@ -268,9 +268,9 @@ export function mountBoard({ container, path, navigate, host }) {
     a.textContent = `↗ ${label}`;
     a.addEventListener("click", (e) => {
       e.stopPropagation();
-      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
       e.preventDefault();
-      navigate(t.conversation_url);
+      navigate(`/conversations/${encodeURIComponent(t.conversation_id)}`);
     });
     return a;
   }
@@ -1540,7 +1540,7 @@ export function mountBoard({ container, path, navigate, host }) {
     on($("#manager-chat-body"), "keydown", ticketKeydown(sendChatMessage));
     // Conversations live in Canvas: route the link through the host.
     on($("#manager-chat-link"), "click", (e) => {
-      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
       e.preventDefault();
       if (state.chat?.url) navigate(state.chat.url);
     });

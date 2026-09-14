@@ -25,7 +25,9 @@ else:
     with app.db() as conn:
         conn.execute('INSERT INTO workspaces(id,path,name,created_at,theme,accent) VALUES(?,?,?,?,?,?)',
                      ('fixture', str(project), 'project', 1, 'light', 'iris'))
-    app.create_ticket('fixture', app.NewTicket(body='Preserved request'))
+    ticket = app.create_ticket('fixture', app.NewTicket(body='Preserved request'))
+    with app.db() as conn:
+        conn.execute('UPDATE tickets SET conversation_id=? WHERE id=?', ('test-conversation', ticket['id']))
     other = Path.home() / 'other-project'
     other.mkdir(exist_ok=True)
     with app.db() as conn:
@@ -33,7 +35,7 @@ else:
                      ('other', str(other), 'other-project', 2, 'teal'))
     for i in range(2):
         app.create_ticket('other', app.NewTicket(body=f'Inactive request {i}'))
-    runtime.write_json(root / 'integration.json', {})
+    runtime.write_json(root / 'integration.json', {'canvas_base': os.environ.get('TEST_CANVAS_BASE', 'https://canvas.example.test')})
     runtime.write_json(root / 'current.json', {'source': str(source), 'version': runtime.VERSION})
     runtime.start(root, source=source, python=sys.executable)
     print(json.dumps({'root': str(root), 'source': str(source)}))

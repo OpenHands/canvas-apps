@@ -13,10 +13,11 @@ function Board({ host, context }) {
 
 export function App({ host, context }) {
   const api = backendFor(host);
-  const [status, setStatus] = useState(null);
-  const [runtime, setRuntime] = useState(null);
+  const [snapshot, setSnapshot] = useState(null);
+  const status = snapshot?.status;
+  const runtime = snapshot?.runtime;
   const [setup, setSetup] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
   const [approved, setApproved] = useState(false);
   const [migrationApproved, setMigrationApproved] = useState(false);
@@ -30,10 +31,11 @@ export function App({ host, context }) {
 
   async function refresh() {
     const next = await api.probe();
-    const detail = next.running ? await api.request('/api/runtime') : null;
     if (!alive.current) return;
-    setStatus(next);
-    setRuntime(detail);
+    // Older installed backends do not include runtime readiness in their probe.
+    const detail = next.running ? next.runtime ?? await api.request('/api/runtime') : null;
+    if (!alive.current) return;
+    setSnapshot({ status: next, runtime: detail });
     setIntegration(old => Object.keys(old).length ? old : {
       agent_server: next.integration?.agent_server || next.agent_server || '',
       automation_api: next.integration?.automation_api || next.automation_api || '',
@@ -46,12 +48,15 @@ export function App({ host, context }) {
 
   async function perform(fn) {
     setBusy(true); setError('');
-    try { await fn(); await refresh(); }
+    try {
+      if (fn) await fn();
+      if (alive.current) await refresh();
+    }
     catch (e) { if (alive.current) setError(e.message); }
     finally { if (alive.current) setBusy(false); }
   }
 
-  useEffect(() => { perform(refresh); }, []);
+  useEffect(() => { perform(); }, []);
   useEffect(() => {
     if (status?.install?.status !== 'installing') return undefined;
     let stopped = false;
@@ -70,7 +75,7 @@ export function App({ host, context }) {
       pending = true;
       try {
         const detail = await api.request('/api/runtime');
-        if (alive.current) setRuntime(detail);
+        if (alive.current) setSnapshot(old => old && { ...old, runtime: detail });
       } catch (e) { if (alive.current) setError(e.message); }
       finally { pending = false; }
     }, 30000);
@@ -83,6 +88,15 @@ export function App({ host, context }) {
   const pathValid = !context.path || context.path.split('/').filter(Boolean).length === 1;
 
   if (!pathValid) return <section className="vibe-ext"><h1>Page not found</h1><button onClick={() => context.navigate(PAGE_ROOT)}>Open board</button></section>;
+
+  if (!status) return <section className="vibe-ext backend-loading" aria-label="Kanban Manager" aria-busy={busy}>
+    <h1>Kanban Manager</h1>
+    {error ? <>
+      <p role="alert">Unable to check the backend: {error}</p>
+      <p>Your board has not been changed. Check the Agent Server connection and recheck.</p>
+      <button disabled={busy} onClick={() => perform()}>Recheck</button>
+    </> : <p role="status">Loading Kanban Manager…</p>}
+  </section>;
 
   return <div className="kanban-app">
     <style>{`
@@ -103,7 +117,6 @@ export function App({ host, context }) {
     {showSetup ? <section className="vibe-ext backend-setup" aria-label="Kanban backend onboarding">
       <h1>Kanban Manager backend</h1>
       <p>This App runs a private FastAPI sidecar on the selected Agent Server. Your board lives in SQLite, not in your browser or the installed App directory.</p>
-      {!status && !error && <p role="status">Checking backend prerequisites…</p>}
       {error && <p role="alert" className="backend-error">{error}</p>}
       <pre>{status?.data_dir || 'Discovering Agent Server home…'}</pre>
       <p>Install downloads the pinned Python dependencies from PyPI into a private virtual environment. It starts a loopback-only, authenticated background process that stays running when this view closes so managers can keep working. No system service or global Python packages are changed.</p>
@@ -114,13 +127,14 @@ export function App({ host, context }) {
         {Object.entries({ agent_server: 'Agent Server URL', automation_api: 'Automation API URL (including /api/automation)', session_key_file: 'Agent Server session key file (absolute path, optional if inherited)', automation_key_file: 'Automation key file (optional if inherited)', canvas_base: 'Canvas URL (optional; blank uses relative conversation links)' }).map(([key, label]) =>
           <label key={key}>{label}<input value={integration[key] || ''} onChange={event => setIntegration({ ...integration, [key]: event.target.value })} /></label>)}
       </fieldset>
+      <p>Data transport: authenticated Agent Server command bridge → local FastAPI HTTP server. Host API 1 does not expose a sidecar HTTP proxy; board traffic still uses the command endpoint.</p>
       <p>Credentials stay on the backend. Enter file paths, never secret values. Missing integrations do not prevent manual board use.</p>
       <label><input type="checkbox" checked={approved} onChange={event => setApproved(event.target.checked)} /> I approve the described downloads, private files and background process.</label>
       <div className="backend-actions">
         <button disabled={!approved || busy || installing} onClick={() => perform(() => api.install(integration))}>{status?.installed ? 'Repair / update backend' : 'Install backend'}</button>
         <button disabled={busy || installing || !status?.installed || status?.running} onClick={() => perform(() => api.start())}>Start backend</button>
         <button disabled={busy || installing || !status?.running} onClick={() => perform(() => api.stop())}>Stop backend</button>
-        <button disabled={busy} onClick={() => perform(refresh)}>Recheck</button>
+        <button disabled={busy} onClick={() => perform()}>Recheck</button>
       </div>
       {installing && <p role="status">Installing backend… You may leave this view; installation continues on the Agent Server.</p>}
       {status?.legacy_present && <section aria-label="Legacy board migration">

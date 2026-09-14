@@ -67,9 +67,32 @@ The portable host API has no custom-backend proxy. The App instead discovers
 `/api/file/home` and sends fixed, structured base64/JSON commands through the
 existing authenticated `/api/bash/execute_bash_command` endpoint. A local
 allowlisted HTTP bridge talks to FastAPI. User text never becomes shell source.
+**Browser data traffic still uses `execute_bash_command`**; the local HTTP hop is
+not a browser-to-sidecar HTTP proxy. Verified against Agent Server **1.46.0**
+(`/server_info`, `/openapi.json`): Apps routes cover installation, inventory,
+enablement/removal and bundle delivery only, with no sidecar/proxy route.
+The current [official host types](https://github.com/OpenHands/OpenHands/blob/89dc8bd4467bad0dab4096b36d9f219bcca5d583/src/types/canvas-extension.ts)
+expose backend identity and root-relative authenticated Agent Server requests,
+not a sidecar connection capability. The linked skill's
+[sidecar connection contract](https://github.com/DevinVinson/skills/blob/f780e4a724e845b4503b7b450cbf94c1b3126f4a/skills/canvas-extension-api/references/sidecar-pattern.md)
+requires a backend-owned authenticated endpoint or an explicit deployment adapter.
+Removing command transport therefore requires adding that bridge to the owning
+Agent Server/deployment, not an App-only change. Do not guess a proxy URL, open a
+public port, read Canvas credentials, or send the private sidecar token to the UI.
+
 There are **no agent-server file-API board reads/writes**. Attachment uploads and
 downloads use 32 KiB chunks to stay within command/response limits and preserve
 binary bytes; files remain capped at 25 MiB.
+
+On each mount/reload, readiness is unknown until a validated probe and migration
+status arrive. Show a neutral loading state, not install/migration instructions;
+an unreachable or malformed response offers recheck without treating the backend
+as missing. Current backends return one readiness snapshot; older installed
+backends remain compatible via a separate runtime check. Ordinary mounts never
+install, start, stop or migrate a backend.
+
+Conversation clicks use Canvas's `/conversations/<id>` route, independent of the
+configured absolute Canvas URL used for native modified/middle-click links.
 
 ## Existing boards and migration
 

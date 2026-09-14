@@ -138,6 +138,11 @@ class SidecarTest(unittest.TestCase):
         state = start(self.data, source=ROOT, python=sys.executable)
         try:
             self.assertEqual(httpx.get(f"http://127.0.0.1:{state['port']}/api/health").status_code, 401)
+            readiness = probe(self.data)
+            self.assertEqual(readiness['runtime']['imports'][0]['tickets'], 1)
+            self.assertFalse(readiness['runtime']['legacy_changed'])
+            self.assertNotIn(state['token'], json.dumps(readiness))
+            self.assertNotIn('port', readiness)
             def append(i):
                 return rpc(self.data, {'path': '/api/tickets/def456/entries',
                     'method': 'POST', 'body': {'body': f'Entry {i}'}})

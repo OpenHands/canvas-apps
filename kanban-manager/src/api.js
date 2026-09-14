@@ -39,7 +39,14 @@ export class Backend {
     return result;
   }
 
-  probe() { return this.command({ action: 'probe' }); }
+  async probe() {
+    const status = await this.command({ action: 'probe' });
+    if (typeof status?.installed !== 'boolean' || typeof status.running !== 'boolean' || typeof status.legacy_present !== 'boolean') {
+      throw new Error('Backend returned an invalid installation status; recheck the connection');
+    }
+    if (status.runtime != null) validateRuntime(status.runtime);
+    return status;
+  }
   install(integration) { return this.command({ action: 'install', confirmed: true, integration, ...PACKAGE }); }
   start() { return this.command({ action: 'start' }); }
   stop() { return this.command({ action: 'stop' }); }
@@ -51,7 +58,14 @@ export class Backend {
       error.status = response.status;
       throw error;
     }
+    if (path === '/api/runtime' && method === 'GET') validateRuntime(response.body);
     return response.body;
+  }
+}
+
+function validateRuntime(detail) {
+  if (!Array.isArray(detail?.imports) || typeof detail.legacy_changed !== 'boolean') {
+    throw new Error('Backend returned invalid readiness data; recheck the connection');
   }
 }
 

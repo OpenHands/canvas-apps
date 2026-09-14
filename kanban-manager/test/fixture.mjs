@@ -8,9 +8,9 @@ import { promisify } from 'node:util';
 const execute = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
 
-export function fixture({ installed = true } = {}) {
+export function fixture({ installed = true, canvasBase = 'https://canvas.example.test' } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'kanban-app-test-'));
-  const env = { ...process.env, HOME: home, VIBE_SESSION_KEY: '', VIBE_AUTOMATION_KEY: '' };
+  const env = { ...process.env, HOME: home, VIBE_SESSION_KEY: '', VIBE_AUTOMATION_KEY: '', TEST_CANVAS_BASE: canvasBase };
   delete env.OH_SESSION_API_KEYS_0;
   delete env.SESSION_API_KEY;
   delete env.OPENHANDS_AUTOMATION_API_KEY;
@@ -37,6 +37,7 @@ export function fixture({ installed = true } = {}) {
         return { exit_code: error.code, stdout: error.stdout, stderr: error.stderr };
       }
     },
+    stopServer() { execFileSync(python, [join(here, 'fixture.py'), 'stop'], { env }); },
     stop() {
       if (installed) execFileSync(python, [join(here, 'fixture.py'), 'stop'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
       rmSync(home, { recursive: true, force: true });

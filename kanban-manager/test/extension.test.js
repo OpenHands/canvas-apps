@@ -55,8 +55,9 @@ async function until(check) {
 }
 function mount(path = 'project', target = backend) {
   const registered = new Map();
+  const navigations = [];
   const host = { apiVersion: '1', backend: { id: 'fixture', kind: 'local', orgId: null },
-    extension: { name: 'kanban-manager', version: '0.3.0' },
+    extension: { name: 'kanban-manager', version: '0.3.1' },
     agentServer: { request: request => target.request(request) },
     registerPage(id, fn) { registered.set(id, fn); return () => registered.delete(id); },
     navigate() {},
@@ -64,8 +65,8 @@ function mount(path = 'project', target = backend) {
   const deactivate = activate(host);
   const container = document.createElement('div');
   document.body.append(container);
-  const dispose = registered.get('board')({ container, path, navigate() {} });
-  return { container, registered, dispose() { dispose(); deactivate(); container.remove(); } };
+  const dispose = registered.get('board')({ container, path, navigate(path) { navigations.push(path); } });
+  return { container, registered, navigations, dispose() { dispose(); deactivate(); container.remove(); } };
 }
 
 test('built React App registers, restores SQLite board, submits, persists preferences and disposes', async () => {
@@ -127,10 +128,137 @@ test('first-run onboarding probes without mutation and requires installation app
 });
 
 test('unreachable backend produces a visible recoverable error', async () => {
-  const broken = { request: async () => { throw new Error('Connection refused'); } };
+  let offline = true;
+  const broken = { request: async request => {
+    if (offline) throw new Error('Connection refused');
+    return backend.request(request);
+  } };
   const app = mount('', broken);
   try {
     await until(() => app.container.querySelector('[role="alert"]')?.textContent.includes('Connection refused'));
     assert.ok([...app.container.querySelectorAll('button')].some(b => b.textContent === 'Recheck'));
+    assert.equal(!!app.container.querySelector('.backend-setup'), false, 'unreachable is not uninstalled');
+    assert.ok(!app.container.textContent.includes('Install backend'));
+    offline = false;
+    click([...app.container.querySelectorAll('button')].find(b => b.textContent === 'Recheck'));
+    await until(() => app.container.textContent.includes('Preserved request'));
   } finally { app.dispose(); }
+});
+
+
+function commandPayload(request) {
+  if (!request.body?.command) return null;
+  return JSON.parse(Buffer.from(request.body.command.split(' ').at(-1), 'base64').toString());
+}
+
+function click(element, modifiers = {}) {
+  const event = new window.Event('click', { bubbles: true, cancelable: true });
+  Object.assign(event, { button: 0, ...modifiers });
+  element.dispatchEvent(event);
+  return event;
+}
+
+test('cold mounts and refreshes never show onboarding while the real backend probe is pending', async () => {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let release, pending = false;
+    const gate = new Promise(resolve => { release = resolve; });
+    const count = backend.requests.length;
+    const delayed = { request: async request => {
+      const response = await backend.request(request);
+      if (commandPayload(request)?.action === 'probe') { pending = true; await gate; }
+      return response;
+    } };
+    const app = mount('project', delayed);
+    try {
+      await until(() => pending);
+      assert.ok(app.container.textContent.includes('Loading Kanban Manager'));
+      assert.equal(!!app.container.querySelector('.backend-setup'), false);
+      assert.ok(!app.container.textContent.includes('Install backend'));
+      assert.equal(!!app.container.querySelector('#board'), false);
+      release();
+      await until(() => app.container.textContent.includes('Preserved request'));
+      await delay(200);
+      assert.equal(backend.requests.slice(count).filter(r => commandPayload(r)?.action === 'probe').length, 1);
+      assert.equal(!!app.container.querySelector('.backend-setup'), false);
+      click([...app.container.querySelectorAll('button')].find(b => b.textContent === 'Backend setup'));
+      await until(() => app.container.querySelector('.backend-setup'));
+      click([...app.container.querySelectorAll('button')].find(b => b.textContent === 'Return to board'));
+      await until(() => app.container.querySelector('#board'));
+    } finally { release(); app.dispose(); }
+  }
+});
+
+test('disposal during readiness prevents late mounts and further requests', async () => {
+  let release, pending = false;
+  const gate = new Promise(resolve => { release = resolve; });
+  const delayed = { request: async request => {
+    const response = await backend.request(request);
+    if (commandPayload(request)?.action === 'probe') { pending = true; await gate; }
+    return response;
+  } };
+  const app = mount('project', delayed);
+  try {
+    await until(() => pending);
+    app.dispose();
+    const count = backend.requests.length;
+    release();
+    await delay(500);
+    assert.equal(backend.requests.length, count);
+    assert.equal(app.container.innerHTML, '');
+  } finally { release(); }
+});
+
+test('an installed stopped backend offers recovery rather than a fresh install', async () => {
+  const stopped = fixture();
+  stopped.stopServer();
+  const app = mount('project', stopped);
+  try {
+    await until(() => app.container.textContent.includes('Repair / update backend'));
+    assert.ok(!app.container.textContent.includes('Install backend'));
+    assert.equal([...app.container.querySelectorAll('button')].find(b => b.textContent === 'Start backend').disabled, false);
+  } finally { app.dispose(); stopped.stop(); }
+});
+
+test('card and drawer links navigate to Canvas paths, not absolute backend URLs', async () => {
+  for (const canvasBase of ['https://canvas.example.test/canvas', '']) {
+    const linked = fixture({ canvasBase });
+    const app = mount('project', linked);
+    try {
+      await until(() => app.container.querySelector('.card .convo'));
+      const link = app.container.querySelector('.card .convo');
+      assert.equal(link.getAttribute('href'), `${canvasBase}/conversations/test-conversation`);
+      for (const modifiers of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }]) {
+        assert.equal(click(link, modifiers).defaultPrevented, false);
+      }
+      app.navigations.length = 0;
+      assert.equal(click(link).defaultPrevented, true);
+      assert.deepEqual(app.navigations, ['/conversations/test-conversation']);
+      click(app.container.querySelector('.card'));
+      await until(() => app.container.querySelector('#drawer .convo'));
+      click(app.container.querySelector('#drawer .convo'));
+      assert.deepEqual(app.navigations, ['/conversations/test-conversation', '/conversations/test-conversation']);
+    } finally { app.dispose(); linked.stop(); }
+  }
+});
+
+
+test('malformed host responses never imply a missing installation or completed migration', async () => {
+  for (const fault of ['status', 'runtime']) {
+    const corrupted = { request: async request => {
+      const response = await backend.request(request);
+      if (commandPayload(request)?.action !== 'probe') return response;
+      // Inject corruption at the host boundary after the real backend responds.
+      const result = JSON.parse(response.stdout);
+      if (fault === 'status') delete result.running;
+      else result.runtime.imports = null;
+      return { ...response, stdout: JSON.stringify(result) };
+    } };
+    const app = mount('project', corrupted);
+    try {
+      await until(() => app.container.querySelector('[role="alert"]'));
+      assert.equal(!!app.container.querySelector('.backend-setup'), false);
+      assert.equal(!!app.container.querySelector('#board'), false);
+      assert.ok(app.container.textContent.includes('invalid'));
+    } finally { app.dispose(); }
+  }
 });
