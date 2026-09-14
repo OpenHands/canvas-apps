@@ -1,0 +1,37 @@
+{
+  "name": "canvas-app-terminal",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:extension": "vite build && node scripts/sync-extension.mjs",
+    "build:spa": "vite build --config spa/vite.config.ts",
+    "build:server": "tsc -p tsconfig.sidecar.json",
+    "build": "npm run build:extension && npm run build:spa && npm run build:server",
+    "start": "node sidecar-dist/server/index.js",
+    "typecheck": "tsc --noEmit && tsc -p spa/tsconfig.json --noEmit && tsc -p tsconfig.sidecar.json --noEmit",
+    "test": "vitest run",
+    "validate": "node scripts/check-extension.mjs",
+    "smoke:extension": "node scripts/blob-smoke.mjs",
+    "smoke:sidecar": "node scripts/sidecar-browser-smoke.mjs",
+    "smoke": "npm run smoke:extension && npm run smoke:sidecar",
+    "check": "npm run typecheck && npm run test && npm run build && npm run validate && npm run smoke"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
+    "express": "5.2.1",
+    "node-pty": "1.1.0",
+    "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6",
+    "@types/node": "26.5.0",
+    "@types/ws": "8.18.1",
+    "jsdom": "27.4.0",
+    "playwright": "1.63.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vitest": "4.1.11"
+  }
+}
