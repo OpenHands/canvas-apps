@@ -303,9 +303,8 @@ export function mountBoard({ container, path, navigate, host }) {
 
   function attachmentEl(a) {
     const link = document.createElement("a");
-    /* Attachment bytes live on the agent server's filesystem, which is only
-       readable with the session key — so there is no plain URL to point at.
-       The blob URL is fetched lazily and revoked on unmount. */
+    // A native link cannot attach Canvas authentication; load an authenticated
+    // Blob lazily and revoke it on unmount.
     link.href = "#";
     link.target = "_blank";
     link.rel = "noopener";

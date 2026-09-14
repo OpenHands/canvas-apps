@@ -29,8 +29,8 @@ export function App({ host, context }) {
     return () => { alive.current = false; release(); };
   }, []);
 
-  async function refresh() {
-    const next = await api.probe();
+  async function refresh(lifecycle = false) {
+    const next = await api.probe(lifecycle);
     if (!alive.current) return;
     // Older installed backends do not include runtime readiness in their probe.
     const detail = next.running ? next.runtime ?? await api.request('/api/runtime') : null;
@@ -46,14 +46,19 @@ export function App({ host, context }) {
     if (next.install?.status === 'error') setError(next.install.error);
   }
 
-  async function perform(fn) {
+  async function perform(fn, lifecycle = setup) {
     setBusy(true); setError('');
     try {
       if (fn) await fn();
-      if (alive.current) await refresh();
+      if (alive.current) await refresh(lifecycle);
+      return true;
     }
-    catch (e) { if (alive.current) setError(e.message); }
+    catch (e) { if (alive.current) setError(e.message); return false; }
     finally { if (alive.current) setBusy(false); }
+  }
+
+  async function showBoard() {
+    if (await perform(undefined, false) && alive.current) setSetup(false);
   }
 
   useEffect(() => { perform(); }, []);
@@ -61,7 +66,7 @@ export function App({ host, context }) {
     if (status?.install?.status !== 'installing') return undefined;
     let stopped = false;
     const poll = async () => {
-      try { await refresh(); } catch (e) { if (!stopped && alive.current) setError(e.message); }
+      try { await refresh(true); } catch (e) { if (!stopped && alive.current) setError(e.message); }
     };
     const timer = setInterval(poll, 2000);
     return () => { stopped = true; clearInterval(timer); };
@@ -94,7 +99,8 @@ export function App({ host, context }) {
     {error ? <>
       <p role="alert">Unable to check the backend: {error}</p>
       <p>Your board has not been changed. Check the Agent Server connection and recheck.</p>
-      <button disabled={busy} onClick={() => perform()}>Recheck</button>
+      <button disabled={busy} onClick={() => perform(undefined, false)}>Recheck</button>
+      <button disabled={busy} onClick={() => { setSetup(true); perform(undefined, true); }}>Backend setup</button>
     </> : <p role="status">Loading Kanban Manager…</p>}
   </section>;
 
@@ -110,7 +116,7 @@ export function App({ host, context }) {
     `}</style>
     <div className="vibe-ext backend-bar">
       <span role="status">{status?.running ? 'Backend connected · SQLite' : 'Kanban backend setup'}</span>
-      <button onClick={() => setSetup(!setup)}>{setup ? 'Return to board' : 'Backend setup'}</button>
+      <button disabled={busy} onClick={() => { if (setup) showBoard(); else { setSetup(true); perform(undefined, true); } }}>{setup ? 'Return to board' : 'Backend setup'}</button>
       {error && !showSetup && <span role="alert">{error} — open Backend setup to recheck.</span>}
       {runtime?.legacy_changed && <strong role="alert">Legacy files changed after migration. Close old App tabs and reconcile the preserved files; SQLite was not overwritten.</strong>}
     </div>
@@ -121,20 +127,20 @@ export function App({ host, context }) {
       <pre>{status?.data_dir || 'Discovering Agent Server home…'}</pre>
       <p>Install downloads the pinned Python dependencies from PyPI into a private virtual environment. It starts a loopback-only, authenticated background process that stays running when this view closes so managers can keep working. No system service or global Python packages are changed.</p>
       <p>Backend package SHA-256: <code>{backendChecksum}</code></p>
-      <p>Repair replaces backend code and dependencies, not your database, attachments, backups, or automation history. Stop does not delete data; managers cannot use the board while it is stopped.</p>
+      <p>Repair replaces backend code and dependencies, not your database, attachments, backups, or automation history. Stop does not delete data; managers cannot use the board while it is stopped. After starting or repairing this deployment, run /etc/nginx/refresh-kanban-manager.py as root to refresh nginx’s private upstream, then Recheck.</p>
       <fieldset disabled={busy || installing}>
         <legend>Backend integration (server-side configuration)</legend>
         {Object.entries({ agent_server: 'Agent Server URL', automation_api: 'Automation API URL (including /api/automation)', session_key_file: 'Agent Server session key file (absolute path, optional if inherited)', automation_key_file: 'Automation key file (optional if inherited)', canvas_base: 'Canvas URL (optional; blank uses relative conversation links)' }).map(([key, label]) =>
           <label key={key}>{label}<input value={integration[key] || ''} onChange={event => setIntegration({ ...integration, [key]: event.target.value })} /></label>)}
       </fieldset>
-      <p>Data transport: authenticated Agent Server command bridge → local FastAPI HTTP server. Host API 1 does not expose a sidecar HTTP proxy; board traffic still uses the command endpoint.</p>
+      <p>Data transport: authenticated HTTP through /kanban-manager/api on the selected backend. Select the nginx-facing backend URL (https://canvas.rbren.io on this deployment). No board data uses shell commands. Backend setup, install, start and stop still use the approved command bridge.</p>
       <p>Credentials stay on the backend. Enter file paths, never secret values. Missing integrations do not prevent manual board use.</p>
       <label><input type="checkbox" checked={approved} onChange={event => setApproved(event.target.checked)} /> I approve the described downloads, private files and background process.</label>
       <div className="backend-actions">
         <button disabled={!approved || busy || installing} onClick={() => perform(() => api.install(integration))}>{status?.installed ? 'Repair / update backend' : 'Install backend'}</button>
         <button disabled={busy || installing || !status?.installed || status?.running} onClick={() => perform(() => api.start())}>Start backend</button>
         <button disabled={busy || installing || !status?.running} onClick={() => perform(() => api.stop())}>Stop backend</button>
-        <button disabled={busy} onClick={() => perform()}>Recheck</button>
+        <button disabled={busy} onClick={() => perform(undefined, false)}>Recheck</button>
       </div>
       {installing && <p role="status">Installing backend… You may leave this view; installation continues on the Agent Server.</p>}
       {status?.legacy_present && <section aria-label="Legacy board migration">
@@ -145,7 +151,7 @@ export function App({ host, context }) {
         {runtime?.imports?.map(item => <p key={item.source}>Imported {item.workspaces} workspaces, {item.tickets} tickets, {item.attachments} attachments. Backup: {item.backup}</p>)}
       </section>}
       <details><summary>Agent-assisted setup</summary><pre>{`Set up Kanban Manager on the selected Agent Server. Read its App README. Verify Python 3.10+, venv, SQLite, and the Agent Server / Automation URLs. Configure private server-side credential file paths under ${status?.data_dir || '<agent-server-home>/.openhands/apps/kanban-manager'}/integration.json. Do not expose credentials to the browser. Explain and obtain approval before system-level changes. Preserve existing data and coordinate legacy writers before migration.`}</pre></details>
-      {status?.running && !migrationNeeded && <button onClick={() => setSetup(false)}>Open board</button>}
+      {status?.running && !migrationNeeded && <button disabled={busy} onClick={showBoard}>Open board</button>}
     </section> : <Board host={host} context={context} />}
   </div>;
 }

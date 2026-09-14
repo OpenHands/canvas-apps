@@ -39,12 +39,16 @@ export class Backend {
     return result;
   }
 
-  async probe() {
-    const status = await this.command({ action: 'probe' });
-    if (typeof status?.installed !== 'boolean' || typeof status.running !== 'boolean' || typeof status.legacy_present !== 'boolean') {
-      throw new Error('Backend returned an invalid installation status; recheck the connection');
+  async probe(lifecycle = false) {
+    if (lifecycle) {
+      const status = await this.command({ action: 'probe' });
+      validateStatus(status);
+      if (status.runtime != null) validateRuntime(status.runtime);
+      return status;
     }
-    if (status.runtime != null) validateRuntime(status.runtime);
+    const runtime = await this.request('/api/runtime');
+    const status = { ...runtime.installation, running: true, runtime };
+    validateStatus(status);
     return status;
   }
   async install(integration) {
@@ -59,15 +63,33 @@ export class Backend {
   start() { return this.command({ action: 'start' }); }
   stop() { return this.command({ action: 'stop' }); }
   async request(path, method = 'GET', body, options = {}) {
-    const response = await this.command({ action: 'rpc', path, method, body, ...options });
-    if (!Number.isInteger(response.status)) throw new Error('Backend is not installed; open Backend setup');
-    if (response.status >= 400) {
-      const error = new Error(typeof response.body?.detail === 'string' ? response.body.detail : `Backend request failed (${response.status})`);
-      error.status = response.status;
+    if (!path.startsWith('/api/') || /[\\#\r\n]/.test(path) || path.split('?')[0].split('/').includes('..')) {
+      throw new Error('Unsupported Kanban API route');
+    }
+    if (options.offset !== undefined) {
+      if (!Number.isSafeInteger(options.offset) || options.offset < 0) throw new Error('Invalid attachment offset');
+      path += `${path.includes('?') ? '&' : '?'}offset=${options.offset}`;
+    }
+    let result;
+    try {
+      result = await this.host.agentServer.request({ path: `/kanban-manager${path}`, method, body });
+    } catch (cause) {
+      const status = cause.status ?? cause.response?.status;
+      const error = new Error(`Kanban HTTP request failed${status ? ` (${status})` : ''}: ${cause.message}. Check the selected backend URL, session authentication and nginx gateway; data requests never fall back to shell commands.`);
+      error.status = status;
       throw error;
     }
-    if (path === '/api/runtime' && method === 'GET') validateRuntime(response.body);
-    return response.body;
+    if (!result || typeof result !== 'object' || Array.isArray(result)) {
+      throw new Error('Kanban HTTP gateway returned invalid JSON. Select the nginx-facing backend URL and recheck.');
+    }
+    if (path === '/api/runtime' && method === 'GET') validateRuntime(result);
+    return result;
+  }
+}
+
+function validateStatus(status) {
+  if (typeof status?.installed !== 'boolean' || typeof status.running !== 'boolean' || typeof status.legacy_present !== 'boolean') {
+    throw new Error('Backend returned an invalid installation status; open Backend setup to repair/update it');
   }
 }
 

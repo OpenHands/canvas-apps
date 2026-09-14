@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "kanban-manager",
   "display_name": "Kanban Manager",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "React agent dispatch board with an installable FastAPI backend and SQLite persistence.",
   "entrypoint": "extension.js",
   "contributes": {

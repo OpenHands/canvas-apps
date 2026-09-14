@@ -133,7 +133,7 @@ class SidecarTest(unittest.TestCase):
         write_json(self.data / 'integration.json', {})
         write_json(self.data / 'current.json', {'source': str(ROOT)})
         write_json(self.legacy / 'sidecar.json', {'root': str(self.data)})
-        start(self.data, source=ROOT, python=sys.executable)
+        state = start(self.data, source=ROOT, python=sys.executable)
         try:
             def api(path, method='GET', body=None, **options):
                 result = rpc(self.data, dict(path=path, method=method, body=body, **options))
@@ -153,6 +153,21 @@ class SidecarTest(unittest.TestCase):
             downloaded = b''.join(base64.b64decode(api('/api/attachments/' + upload['id'], offset=offset)['base64'])
                                   for offset in range(0, len(content), 32768))
             self.assertEqual(downloaded, content)
+            with httpx.Client(base_url=f"http://127.0.0.1:{state['port']}",
+                              headers={'Authorization': f"Bearer {state['token']}"}) as client:
+                path = '/api/attachments/' + upload['id']
+                chunks = []
+                for offset in range(0, len(content), 32768):
+                    response = client.get(path, params={'offset': offset})
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(response.headers['content-type'], 'application/json')
+                    chunks.append(base64.b64decode(response.json()['base64']))
+                self.assertEqual(b''.join(chunks), content)
+                self.assertEqual(client.get(path).content, content)
+                self.assertEqual(client.get(path, headers={'Range': 'bytes=10-20'}).content, content[10:21])
+                self.assertEqual(client.get(path, params={'offset': -1}).status_code, 400)
+                self.assertEqual(client.get(path, params={'offset': len(content)}).status_code, 416)
+
             env = {**os.environ, 'VIBE_STORE_DIR': str(self.legacy)}
             env.pop('VIBE_SIDECAR_ROOT', None)
             result = subprocess.run([sys.executable, str(ROOT / 'automation/vibectl.py'),
@@ -176,6 +191,8 @@ class SidecarTest(unittest.TestCase):
             self.assertFalse(readiness['runtime']['legacy_changed'])
             self.assertNotIn(state['token'], json.dumps(readiness))
             self.assertNotIn('port', readiness)
+            self.assertEqual(readiness['runtime']['installation']['data_dir'], str(self.data))
+            self.assertEqual(readiness['runtime']['installation']['integration'], {})
             def append(i):
                 return rpc(self.data, {'path': '/api/tickets/def456/entries',
                     'method': 'POST', 'body': {'body': f'Entry {i}'}})

@@ -8,6 +8,7 @@ every minute and drives worker conversations on the agent server.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import io
 import json
@@ -1024,7 +1025,7 @@ async def upload_attachment(ticket_id: str, request: Request, filename: str = "f
 
 
 @app.get("/api/attachments/{att_id}")
-def download_attachment(att_id: str):
+def download_attachment(att_id: str, offset: int | None = None):
     with db() as conn:
         row = conn.execute("SELECT * FROM attachments WHERE id=?", (att_id,)).fetchone()
     if not row:
@@ -1032,6 +1033,16 @@ def download_attachment(att_id: str):
     path = attachment_disk_path(row["id"], row["filename"])
     if not path.is_file():
         raise HTTPException(404, "attachment file missing on disk")
+    if offset is not None:
+        if offset < 0:
+            raise HTTPException(400, "Invalid attachment offset")
+        if offset >= path.stat().st_size and offset != 0:
+            raise HTTPException(416, "Attachment offset exceeds file size")
+        with path.open('rb') as stream:
+            stream.seek(offset)
+            chunk = stream.read(32768)
+        return {'base64': base64.b64encode(chunk).decode(),
+                'content_type': row['content_type'] or 'application/octet-stream'}
     return FileResponse(
         path,
         media_type=row["content_type"] or "application/octet-stream",

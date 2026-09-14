@@ -57,7 +57,7 @@ function mount(path = 'project', target = backend) {
   const registered = new Map();
   const navigations = [];
   const host = { apiVersion: '1', backend: { id: 'fixture', kind: 'local', orgId: null },
-    extension: { name: 'kanban-manager', version: '0.3.1' },
+    extension: { name: 'kanban-manager', version: '0.3.2' },
     agentServer: { request: request => target.request(request) },
     registerPage(id, fn) { registered.set(id, fn); return () => registered.delete(id); },
     navigate() {},
@@ -103,7 +103,9 @@ test('built React App registers, restores SQLite board, submits, persists prefer
     await until(() => reopened.container.textContent.includes('New request from real UI'));
     assert.equal(reopened.container.querySelector('#max-concurrent').value, '5');
   } finally { reopened.dispose(); }
-  assert.ok(backend.requests.every(r => ['/api/file/home', '/api/bash/execute_bash_command'].includes(r.path)));
+  assert.ok(backend.requests.every(r => r.path.startsWith('/kanban-manager/api/')));
+  assert.ok(backend.requests.some(r => r.method === 'POST'));
+  assert.ok(backend.requests.every(r => !r.headers?.Authorization && !r.headers?.['X-Session-API-Key']));
 });
 
 test('unsupported API and unknown nested routes fail clearly', async () => {
@@ -118,7 +120,9 @@ test('first-run onboarding probes without mutation and requires installation app
   const empty = fixture({ installed: false });
   const app = mount('', empty);
   try {
-    await until(() => app.container.textContent.includes(empty.home));
+    await until(() => app.container.querySelector('[role="alert"]'));
+    click([...app.container.querySelectorAll('button')].find(b => b.textContent === 'Backend setup'));
+    await until(() => [...app.container.querySelectorAll('button')].some(b => b.textContent === 'Install backend'));
     const install = [...app.container.querySelectorAll('button')].find(b => b.textContent === 'Install backend');
     assert.ok(install.disabled);
     assert.deepEqual(readdirSync(empty.home), [], 'probe must not create backend state');
@@ -146,11 +150,6 @@ test('unreachable backend produces a visible recoverable error', async () => {
 });
 
 
-function commandPayload(request) {
-  if (!request.body?.command) return null;
-  return JSON.parse(Buffer.from(request.body.command.split(' ').at(-1), 'base64').toString());
-}
-
 function click(element, modifiers = {}) {
   const event = new window.Event('click', { bubbles: true, cancelable: true });
   Object.assign(event, { button: 0, ...modifiers });
@@ -165,7 +164,7 @@ test('cold mounts and refreshes never show onboarding while the real backend pro
     const count = backend.requests.length;
     const delayed = { request: async request => {
       const response = await backend.request(request);
-      if (commandPayload(request)?.action === 'probe') { pending = true; await gate; }
+      if (request.path === '/kanban-manager/api/runtime') { pending = true; await gate; }
       return response;
     } };
     const app = mount('project', delayed);
@@ -178,10 +177,10 @@ test('cold mounts and refreshes never show onboarding while the real backend pro
       release();
       await until(() => app.container.textContent.includes('Preserved request'));
       await delay(200);
-      assert.equal(backend.requests.slice(count).filter(r => commandPayload(r)?.action === 'probe').length, 1);
+      assert.equal(backend.requests.slice(count).filter(r => r.path === '/kanban-manager/api/runtime').length, 1);
       assert.equal(!!app.container.querySelector('.backend-setup'), false);
       click([...app.container.querySelectorAll('button')].find(b => b.textContent === 'Backend setup'));
-      await until(() => app.container.querySelector('.backend-setup'));
+      await until(() => app.container.querySelector('.backend-setup') && [...app.container.querySelectorAll('button')].some(b => b.textContent === 'Return to board' && !b.disabled));
       click([...app.container.querySelectorAll('button')].find(b => b.textContent === 'Return to board'));
       await until(() => app.container.querySelector('#board'));
     } finally { release(); app.dispose(); }
@@ -193,7 +192,7 @@ test('disposal during readiness prevents late mounts and further requests', asyn
   const gate = new Promise(resolve => { release = resolve; });
   const delayed = { request: async request => {
     const response = await backend.request(request);
-    if (commandPayload(request)?.action === 'probe') { pending = true; await gate; }
+    if (request.path === '/kanban-manager/api/runtime') { pending = true; await gate; }
     return response;
   } };
   const app = mount('project', delayed);
@@ -213,6 +212,8 @@ test('an installed stopped backend offers recovery rather than a fresh install',
   stopped.stopServer();
   const app = mount('project', stopped);
   try {
+    await until(() => app.container.querySelector('[role="alert"]'));
+    click([...app.container.querySelectorAll('button')].find(b => b.textContent === 'Backend setup'));
     await until(() => app.container.textContent.includes('Repair / update backend'));
     assert.ok(!app.container.textContent.includes('Install backend'));
     assert.equal([...app.container.querySelectorAll('button')].find(b => b.textContent === 'Start backend').disabled, false);
@@ -243,15 +244,14 @@ test('card and drawer links navigate to Canvas paths, not absolute backend URLs'
 
 
 test('malformed host responses never imply a missing installation or completed migration', async () => {
-  for (const fault of ['status', 'runtime']) {
+  for (const fault of ['status', 'runtime', 'html']) {
     const corrupted = { request: async request => {
       const response = await backend.request(request);
-      if (commandPayload(request)?.action !== 'probe') return response;
-      // Inject corruption at the host boundary after the real backend responds.
-      const result = JSON.parse(response.stdout);
-      if (fault === 'status') delete result.running;
-      else result.runtime.imports = null;
-      return { ...response, stdout: JSON.stringify(result) };
+      if (request.path !== '/kanban-manager/api/runtime') return response;
+      // Inject corruption only after a real HTTP response arrives.
+      if (fault === 'html') return '<!doctype html><html>Canvas page, not an API</html>';
+      if (fault === 'status') return { ...response, installation: null };
+      return { ...response, imports: null };
     } };
     const app = mount('project', corrupted);
     try {
@@ -261,4 +261,17 @@ test('malformed host responses never imply a missing installation or completed m
       assert.ok(app.container.textContent.includes('invalid'));
     } finally { app.dispose(); }
   }
+});
+
+
+test('HTTP authorization failure never falls back to command data transport', async () => {
+  const unauthorized = fixture({ authorized: false });
+  const app = mount('project', unauthorized);
+  try {
+    await until(() => app.container.querySelector('[role="alert"]'));
+    assert.ok(app.container.textContent.includes('401'));
+    assert.ok(unauthorized.requests.every(r => r.path.startsWith('/kanban-manager/api/')));
+    assert.equal(!!app.container.querySelector('#board'), false);
+    assert.equal(!!app.container.querySelector('.backend-setup'), false);
+  } finally { app.dispose(); unauthorized.stop(); }
 });

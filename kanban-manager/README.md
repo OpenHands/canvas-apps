@@ -20,7 +20,11 @@ Enable the trusted App, then open **Kanban Manager**. Its route is still
 Installation and enablement are separate. Fresh installation does not start the
 backend or run an installer.
 
-The first view performs a read-only probe. Python 3.10+ with `venv`, pip and
+The first view performs an authenticated, read-only HTTP readiness request.
+A provisioned gateway and backend 0.3.2+ are required for board access. If the
+gateway/backend is missing, choose **Backend setup** for the explicit lifecycle
+probe and installation controls; no HTTP failure silently falls back to shell
+data RPCs. Python 3.10+ with `venv`, pip and
 standard-library SQLite must be available on the **Agent Server machine**.
 The sidecar supports POSIX hosts (Linux/macOS); it is not a Windows service.
 If prerequisites are missing, use the displayed agent-assisted setup prompt
@@ -63,38 +67,59 @@ paths**, never keys, in the setup form. Alternatively the backend can inherit
 `integration.json`; the browser never receives credential values or the
 sidecar's bearer token. Empty integrations still permit manual board use.
 
-The portable host API has no custom-backend proxy. The App instead discovers
-`/api/file/home` and sends fixed, structured base64/JSON commands through the
-existing authenticated `/api/bash/execute_bash_command` endpoint. A local
-allowlisted HTTP bridge talks to FastAPI. User text never becomes shell source. Approved backend package uploads use
-32 KiB base64 chunks (4 MiB encoded-package limit) in private `staging/` files
-before checksum verification and installation; no single command embeds the
-whole package. A retry starts its upload over, and successful extraction removes
-the staged file. Existing data and integration configuration stay unchanged
-until the verified package is ready to install.
-**Browser data traffic still uses `execute_bash_command`**; the local HTTP hop is
-not a browser-to-sidecar HTTP proxy. Verified against Agent Server **1.46.0**
-(`/server_info`, `/openapi.json`): Apps routes cover installation, inventory,
-enablement/removal and bundle delivery only, with no sidecar/proxy route.
-The current [official host types](https://github.com/OpenHands/OpenHands/blob/89dc8bd4467bad0dab4096b36d9f219bcca5d583/src/types/canvas-extension.ts)
-expose backend identity and root-relative authenticated Agent Server requests,
-not a sidecar connection capability. The linked skill's
-[sidecar connection contract](https://github.com/DevinVinson/skills/blob/f780e4a724e845b4503b7b450cbf94c1b3126f4a/skills/canvas-extension-api/references/sidecar-pattern.md)
-requires a backend-owned authenticated endpoint or an explicit deployment adapter.
-Removing command transport therefore requires adding that bridge to the owning
-Agent Server/deployment, not an App-only change. Do not guess a proxy URL, open a
-public port, read Canvas credentials, or send the private sidecar token to the UI.
+### HTTP gateway contract (deployment prerequisite)
 
-There are **no agent-server file-API board reads/writes**. Attachment uploads and
-downloads use 32 KiB chunks to stay within command/response limits and preserve
-binary bytes; files remain capped at 25 MiB.
+Board, settings, manager/chat, migration, readiness and attachment requests use
+`host.agentServer.request({path: "/kanban-manager/api/...", method, body})`.
+Canvas chooses the owning backend URL and supplies its session authentication;
+the App does not read localStorage credentials, derive an origin, or receive the
+sidecar bearer. **Normal mounting, polling and board operations execute no
+shell commands.** Host API 1 still has no native sidecar proxy: this prefix is an
+explicit deployment adapter, not an invented portable Canvas capability.
 
-On each mount/reload, readiness is unknown until a validated probe and migration
-status arrive. Show a neutral loading state, not install/migration instructions;
-an unreachable or malformed response offers recheck without treating the backend
-as missing. Current backends return one readiness snapshot; older installed
-backends remain compatible via a separate runtime check. Ordinary mounts never
-install, start, stop or migrate a backend.
+Select the **nginx-facing backend URL** in Canvas's backend settings. On the
+requesting deployment it is `https://canvas.rbren.io`, with the gateway at
+`https://canvas.rbren.io/kanban-manager`. Direct Agent Server ports and the
+frontend's internal development port do not implement this route. A 401, missing
+route, HTML response, or unavailable sidecar is a visible recoverable error.
+The App never bypasses authentication or silently changes its data transport.
+
+The operator-owned gateway must:
+
+- authenticate `X-Session-API-Key` against the owning Agent Server before proxying
+  (this deployment uses nginx `auth_request` to protected `/api/file/home`;
+  `/server_info` is public and is not an authentication check);
+- strip the browser's session key and cookies, inject the private sidecar bearer
+  server-side, and route only to its registered loopback listener;
+- strip `/kanban-manager`, preserve methods/query strings/JSON bodies, support
+  the API allowlist in `sidecar/runtime.py`, and reject credential-export and
+  internal shutdown endpoints;
+- maintain its upstream as the sidecar's port and bearer rotate. On this
+  deployment, run `/etc/nginx/refresh-kanban-manager.py` as root after each
+  sidecar start/repair. This is a machine-provisioned helper, not part of the App
+  installer, and no automatic nginx watcher is installed.
+
+See the [host request API](https://github.com/OpenHands/OpenHands/blob/main/src/types/canvas-extension.ts)
+and [sidecar deployment contract](https://github.com/DevinVinson/skills/blob/main/skills/canvas-extension-api/references/sidecar-pattern.md).
+
+Only explicit **Backend setup**, install/repair, start/stop and installation
+progress use `/api/file/home` plus fixed base64/JSON commands through
+`/api/bash/execute_bash_command`. User text never becomes shell source. Approved
+package uploads use bounded 32 KiB base64 chunks (4 MiB encoded-package limit),
+private staging, and SHA-256 verification before installation. Backend-owned
+manager CLIs retain their local HTTP bridge for compatibility.
+
+There are **no agent-server file-API board reads/writes**. The host request API
+is JSON-oriented, so binary attachments use 32 KiB base64 chunks over HTTP;
+`GET /api/attachments/<id>?offset=<byte-offset>` returns a chunk. Ordinary
+requests without `offset` still return native files and support HTTP ranges for
+the standalone website. Attachment size remains capped at 25 MiB.
+
+Mount/reload waits for one validated HTTP readiness snapshot containing safe
+installation metadata and migration status, showing neutral loading rather than
+onboarding. Older installed backends can still be inspected and repaired through
+the explicit lifecycle probe; update the backend and refresh the gateway before
+opening the HTTP board. Installation, repair and migration never erase data.
 
 Conversation clicks use Canvas's `/conversations/<id>` route, independent of the
 configured absolute Canvas URL used for native modified/middle-click links.
@@ -170,16 +195,18 @@ external runtime chunks are required. Python dependencies from
 `backend/requirements.txt` must be available for the real-path tests. In the
 source repository they live at the repository root instead of `backend/`.
 
-Checks exercise activation/routes/disposal and the real fixed bridge → FastAPI
-→ SQLite path. Chromium imports the actual artifact from a Blob URL and tests
-submission, keyboard drawer access, appending entries and a multi-chunk binary
-attachment. The only substituted boundary is Canvas's host interface; service
-responses are not mocked. The source repository additionally tests migrations,
+Checks exercise activation/routes/disposal, real authenticated HTTP → FastAPI
+→ SQLite data paths, and the separate fixed lifecycle helper. Chromium imports the actual artifact from a Blob URL and tests
+submission, keyboard drawer access, appending entries and byte-for-byte HTTP
+attachment round trips. Normal board tests assert zero command requests. The unavailable Canvas/gateway boundary is substituted only for routing and
+server-side auth injection; service responses come from real HTTP. Corruption
+regressions deliberately damage responses after the real service answers. The source repository additionally tests migrations,
 concurrent writes, authentication, restart persistence and legacy CLI routing.
 
 Local acceptance: install this package from its absolute backend-local path,
 enable, onboard, open the board, exercise a nested workspace route, reload,
 disable/re-enable, and verify that the same data remains. Reinstall the UI and
-use **Repair / update backend** after backend changes. Refresh existing manager
+use **Repair / update backend** after backend changes, then refresh the gateway
+and recheck HTTP readiness. Refresh existing manager
 automation tarballs while preserving enabled states. Never restart Agent Server
 just to deploy Kanban Manager; doing so interrupts worker conversations.

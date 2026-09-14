@@ -56,6 +56,7 @@ def add_routes(vibe, root, token, shutdown):
     @app.get('/api/runtime')
     def status():
         return {**migration_status(vibe), 'version': runtime.VERSION,
+                'installation': runtime.installation_status(root),
                 'agent_configured': bool(vibe.AGENT_SERVER and vibe.SESSION_KEY),
                 'automation_configured': bool(vibe.AUTOMATION_API and vibe.AUTOMATION_KEY)}
 

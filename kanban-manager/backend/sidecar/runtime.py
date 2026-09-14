@@ -15,7 +15,7 @@ import time
 import urllib.error
 import urllib.request
 
-VERSION = '0.3.1'
+VERSION = '0.3.2'
 _children: dict[int, subprocess.Popen] = {}
 ROUTE = re.compile(r'^/api/(?:health|runtime|workspaces(?:/[A-Za-z0-9_-]+(?:/(?:board|tickets|reorder|automation(?:/(?:start|stop|trigger))?|manager-chat(?:/[A-Za-z0-9_-]+/messages)?))?)?|tickets/[A-Za-z0-9_-]+/(?:entries|verify|attachments)|attachments/[A-Za-z0-9_-]+|uploads(?:/[A-Za-z0-9_-]+(?:/finish)?)?|manager/(?:llm-profiles|conversations(?:/[A-Za-z0-9_-]+)?|workspaces/[A-Za-z0-9_-]+/snapshot|tickets/[A-Za-z0-9_-]+))$')
 
@@ -74,9 +74,20 @@ def healthy(root: Path):
     return None
 
 
-def probe(root: Path) -> dict:
-    current = read_json(root / 'current.json', {})
+def installation_status(root: Path) -> dict:
     integration = read_json(root / 'integration.json', {})
+    keys = ('agent_server', 'automation_api', 'session_key_file', 'automation_key_file', 'canvas_base')
+    return {'version': VERSION, 'data_dir': str(root),
+            'installed': bool(read_json(root / 'current.json', {})),
+            'python': sys.version.split()[0], 'sqlite': sqlite3.sqlite_version,
+            'install': read_json(root / 'install.json'),
+            'legacy_present': (Path.home() / '.openhands/vibe-manager/index.json').is_file(),
+            'integration': {key: integration[key] for key in keys if key in integration},
+            'agent_server': os.environ.get('AGENT_SERVER_URL', ''),
+            'automation_api': os.environ.get('VIBE_AUTOMATION_API', '')}
+
+
+def probe(root: Path) -> dict:
     state = healthy(root)
     detail = None
     if state:
@@ -84,12 +95,7 @@ def probe(root: Path) -> dict:
         if response['status'] != 200:
             raise RuntimeError('Cannot read backend readiness; recheck or inspect service.log')
         detail = response['body']
-    return {'version': VERSION, 'data_dir': str(root), 'installed': bool(current),
-            'running': bool(state), 'runtime': detail, 'python': sys.version.split()[0],
-            'sqlite': sqlite3.sqlite_version, 'install': read_json(root / 'install.json'),
-            'legacy_present': (Path.home() / '.openhands/vibe-manager/index.json').is_file(),
-            'integration': integration, 'agent_server': os.environ.get('AGENT_SERVER_URL', ''),
-            'automation_api': os.environ.get('VIBE_AUTOMATION_API', '')}
+    return {**installation_status(root), 'running': bool(state), 'runtime': detail}
 
 
 def start(root: Path, *, source: Path | None = None, python: str | None = None):

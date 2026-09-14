@@ -29,7 +29,7 @@ try {
     const app = await import(url);
     URL.revokeObjectURL(url);
     window.deactivate = app.activate({ apiVersion: '1', backend: { id: 'browser-fixture', kind: 'local' },
-      extension: { name: 'kanban-manager', version: '0.3.1' }, agentServer: { request: window.kanbanRequest },
+      extension: { name: 'kanban-manager', version: '0.3.2' }, agentServer: { request: window.kanbanRequest },
       registerPage(id, mount) {
         window.mount = mount;
         window.dispose = mount({ container: document.querySelector('#app'), path: 'project', navigate(path) { window.observed.paths.push(path); } });
@@ -60,6 +60,17 @@ try {
   writeFileSync(path, bytes);
   await (await page.$('#drawer-file-input')).uploadFile(path);
   await page.waitForFunction(() => document.querySelector('#drawer-attachments').textContent.includes('attachment.bin'), { timeout: 30000 });
+  await page.evaluate(() => {
+    const create = URL.createObjectURL;
+    URL.createObjectURL = blob => {
+      if (blob.size === 75000) blob.arrayBuffer().then(buffer => { window.downloaded = Array.from(new Uint8Array(buffer)); });
+      return create.call(URL, blob);
+    };
+  });
+  await page.click('#drawer-attachments a');
+  await page.waitForFunction(() => window.downloaded?.length === 75000);
+  assert.deepEqual(Buffer.from(await page.evaluate(() => window.downloaded)), bytes);
+  assert.ok(backend.requests.every(request => request.path.startsWith('/kanban-manager/api/')));
   await page.click('#drawer-close');
   await page.evaluate(() => {
     window.dispose();
@@ -101,6 +112,8 @@ try {
         }, navigate() {},
       });
     }, readFileSync(new URL('../extension.js', import.meta.url), 'utf8'));
+    await page.waitForSelector('.backend-loading [role=alert]');
+    await page.evaluate(() => [...document.querySelectorAll('button')].find(b => b.textContent === 'Backend setup').click());
     await page.waitForSelector('.backend-setup fieldset:not([disabled])');
     assert.deepEqual(readdirSync(empty.home), []);
     assert.equal(await page.$eval('.backend-actions button', button => button.disabled), true);
@@ -111,7 +124,7 @@ try {
     assert.ok(!readdirSync(join(empty.home, '.openhands/apps/kanban-manager')).includes('current.json'));
     await page.evaluate(() => { window.dispose(); window.deactivate(); });
   } finally { empty.stop(); }
-  console.log('Chromium Blob smoke: no onboarding flash on mount/remount, conversation routes, submit, drawer, append, 75KB attachment, bounded installer upload/checksum, disposal passed');
+  console.log('Chromium Blob smoke: no onboarding flash on mount/remount, conversation routes, submit, drawer, append, 75KB HTTP attachment round-trip, zero command data requests, bounded installer upload/checksum, disposal passed');
 } finally {
   await browser.close();
   await new Promise(resolve => server.close(resolve));
