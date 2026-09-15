@@ -24,6 +24,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import sys
 import time
 import urllib.error
@@ -46,9 +47,14 @@ if CONFIG.get("sidecar_root"):
 if CONFIG.get("store_dir"):
     os.environ.setdefault("VIBE_STORE_DIR", CONFIG["store_dir"])
 
+for field, env in (("agent_server", "AGENT_SERVER_URL"), ("canvas_base", "VIBE_CANVAS_BASE"),
+                   ("session_key_file", "VIBE_SESSION_KEY_FILE"), ("manager_skill_file", "VIBE_MANAGER_SKILL_FILE")):
+    if CONFIG.get(field) is not None:
+        os.environ.setdefault(env, CONFIG[field])
+
 # Installed outside the per-run tarball dir so the manager conversation can
 # still call it after this run is cleaned up.
-VIBECTL = vibestore.install_cli(WORKSPACE_ID, WORKSPACE_PATH)
+VIBECTL = shlex.quote(vibestore.install_cli(WORKSPACE_ID, WORKSPACE_PATH))
 
 AGENT_SERVER = os.environ.get("AGENT_SERVER_URL", CONFIG["agent_server"]).rstrip("/")
 SESSION_KEY = os.environ.get("SESSION_API_KEY") or os.environ.get("OH_SESSION_API_KEYS_0", "")
@@ -465,13 +471,11 @@ def conv_statuses(tickets: list[dict]) -> dict[str, str]:
 
 def model_selection_instructions() -> str:
     """Manager-prompt policy for choosing worker LLM profiles."""
-    return """## Model selection for workers
-For manager-dispatched work, use only these GPT profiles and always pass the matching `--profile`:
-- `gpt-6-astra` → high effort: architecture, tricky debugging, large refactors, vague requirements
-- `gpt-5.6-sol` → medium/default effort: routine feature work and bug fixes
-- `gpt-5.6-terra` → low effort: trivial chores, copy tweaks, docs, config, and one-liners
-Do not select or recommend Anthropic profiles for manager-dispatched work. Passing `--profile` to a follow-up switches that EXISTING conversation's model first — escalate a stuck worker to a stronger GPT tier this way.
-**The user's choice wins**: a ticket with a non-null `requested_model` runs on that profile, and passing `--ticket <ticket_id>` applies it for you — your `--profile` is ignored for that ticket. A null `requested_model` is "manager's choice": you pick from the GPT tiers above. Each ticket also carries `budget_usd`, the spend cap its worker gets; a worker that hits it is paused automatically and its card is moved to needs_input, so do not restart it without a new instruction from the user."""
+    return f"""## Model selection for workers
+Run `{VIBECTL} profiles` at the start of each run to discover the owning Agent Server's available profiles, their models, and the active profile. Choose from that LIVE list; never invent a profile name or assume a provider is available. Use the instance-local manager skill, if supplied, for local preferences, not as a substitute for discovery.
+Match capability, cost and task effort: high effort for architecture, tricky debugging, large refactors or vague requirements; medium effort for routine features and bug fixes; low effort for trivial chores, copy, docs and one-liners. Use the reported model and any local guidance to judge suitability; do not infer capability solely from an unfamiliar profile alias. Pass the exact available name with `--profile`. If discovery is unavailable, empty, or offers no basis for a better choice, omit `--profile` to use the server's active default for a new worker (or retain an existing worker's model on follow-up). Do not guess or silently substitute for an explicit user choice.
+Passing `--profile` to a follow-up switches that EXISTING conversation's model first — reassess the available profiles when escalating a stuck worker.
+**The user's choice wins**: a ticket with a non-null `requested_model` runs on that profile, and passing `--ticket <ticket_id>` applies it for you — your `--profile` is ignored for that ticket. A null `requested_model` is "manager's choice". Also honor explicit model instructions in user entries; if the requested model cannot be resolved to an available profile, ask the user instead of substituting. Each ticket also carries `budget_usd`, the spend cap its worker gets; a worker that hits it is paused automatically and its card is moved to needs_input, so do not restart it without a new instruction from the user."""
 
 
 def build_manager_prompt(ws: dict, tickets: list[dict]) -> str:
@@ -510,15 +514,21 @@ def build_manager_prompt(ws: dict, tickets: list[dict]) -> str:
     )
     push_instructions = (
         "Push mode is **pull request**: workers must create a feature branch in their worktree, commit, "
-        "push the branch, and open a PR against the default branch (gh CLI is available; "
-        "GITHUB_PERSONAL_ACCESS_TOKEN is auto-injected into their terminal). When a worker finishes and "
+        "push the branch, and open a PR against the actual remote default branch. When a worker finishes and "
         "reports a PR URL, patch the ticket with --pr-url and --status needs_input. "
         "(PR merged -> finished is handled automatically; don't merge PRs yourself.)"
         if ws["push_mode"] == "pr"
         else
-        "Push mode is **push to main**: workers must commit in their worktree and push directly to the "
-        "default branch (main). When a worker finishes and its commits are on main, set the ticket status "
-        "to finished. Verify with `git log origin/main` if unsure."
+        "Push mode is **direct push**: workers must commit in their worktree and push directly to the "
+        "actual remote default branch. When a worker finishes and its commits are on that branch, set the ticket status "
+        "to finished. Verify the landed commit against the freshly fetched remote branch if unsure."
+    )
+    push_instructions += (
+        " Discover the actual remote default branch with `git ls-remote --symref origin HEAD`; "
+        "do not assume its name or rely on a stale origin/HEAD. Inspect available repository-host "
+        "tools and configured authentication; do not assume a CLI or credentials are installed. "
+        "Use the repository host's API or an available authenticated CLI, never print credentials, "
+        "and ask the user if required access is missing."
     )
     push_instructions += (
         " Worker worktrees are branched off the freshly fetched default branch, but tell every worker to "
@@ -559,8 +569,8 @@ Worker dispatch — workers ALWAYS work in a git worktree, never in the main che
 
 ## Your job this run
 1. Read `AGENTS.md` in `{WORKSPACE_PATH}` (create it if missing) so you understand the project architecture. Keep it up to date: when finished tickets reveal new architecture/conventions, append concise notes so future workers benefit.
-2. For every ticket whose worker conversation just ended (conversation_status finished/idle but ticket still in_progress): read its final response. If it opened a PR, patch --pr-url and --status needs_input. In push-to-main mode verify the push landed on main and normally mark finished. If the worker failed or stalled (error/stuck), decide: send a corrective follow-up message, or mark needs_input with a concise append_entry asking the user for guidance.
-   - **Report-back/information rule**: first determine the ticket's intent from its user entries. If the ticket says "report back", asks a question, or otherwise asks for information (including investigation, research, status, or an explanation), then after the worker reports the requested information always patch it to `--status needs_input`, even in push-to-main mode. Do not mark it finished merely because no code or commit was expected; needs_input means the requested report is ready for the user to read and respond to.
+2. For every ticket whose worker conversation just ended (conversation_status finished/idle but ticket still in_progress): read its final response. If it opened a PR, patch --pr-url and --status needs_input. In direct-push mode verify the push landed on the actual remote default branch and normally mark finished. If the worker failed or stalled (error/stuck), decide: send a corrective follow-up message, or mark needs_input with a concise append_entry asking the user for guidance.
+   - **Report-back/information rule**: first determine the ticket's intent from its user entries. If the ticket says "report back", asks a question, or otherwise asks for information (including investigation, research, status, or an explanation), then after the worker reports the requested information always patch it to `--status needs_input`, even in direct-push mode. Do not mark it finished merely because no code or commit was expected; needs_input means the requested report is ready for the user to read and respond to.
    - Conversely, if a ticket's conversation_status is **running** but the ticket is needs_input/finished/pending, the user likely resumed the agent manually (sent it a message directly). Set the ticket status back to in_progress (and clear a stale manager_note with `--manager-note ''`) so the board reflects that the agent is working again.
 3. For tickets with NEW user entries beyond dispatched_entry_count:
    - Only user/agent-authored entries count as new requests. If the entries beyond dispatched_entry_count are all manager comments (yours), there is nothing to relay — bump dispatched_entry_count to the current entry count so the board reads as fully dispatched, and move on.
@@ -571,10 +581,10 @@ Worker dispatch — workers ALWAYS work in a git worktree, never in the main che
    - **Avoid conflicts**: think about which tickets touch the same files/subsystems. Serialize tickets that would collide — run only independent tickets concurrently.
    - **Deferral contract**: if you deliberately leave a pending ticket undispatched (conflict serialization, capacity, needs another ticket first), you MUST set a manager_note on it (e.g. "queued behind a1b2c3 to avoid conflicts in the audio engine"). This suppresses re-invocation loops. Clear/replace the note when you later dispatch it.
    - **One conversation per ticket**: never graft a new ticket onto another ticket's conversation, however related. A conversation belongs to the ticket it was created for, and once that ticket is finished/verified it is retired — every new ticket gets a fresh conversation. (Follow-ups on the SAME ticket still reuse its own conversation — see 3.) Carry over context by putting it in the new worker's prompt, not by reusing the old thread.
-5. Prompts that start a NEW worker conversation must be self-contained: the full ticket text (all user entries), the project path, a reminder to read AGENTS.md first, the push-mode instructions above (branch+PR, or push directly to main), and — in PR mode — to report the PR URL in their final message. Follow-ups to the same ticket are the exception: include only the new request/context needed, as described in 3, because that conversation already has the prior messages.
+5. Prompts that start a NEW worker conversation must be self-contained: the full ticket text (all user entries), the project path, a reminder to read AGENTS.md first, the push-mode instructions above (branch+PR, or push directly to the actual remote default branch), and — in PR mode — to report the PR URL in their final message. Follow-ups to the same ticket are the exception: include only the new request/context needed, as described in 3, because that conversation already has the prior messages.
    - **Attachments**: tickets may carry file/image attachments (see each ticket's `attachments` array). Each has a stable absolute `path` on this machine, readable from worker worktrees. In a new-conversation prompt, list every attachment as `<filename> (<content_type>) at <path>` and tell the worker to read/view it from that path (agents can view images with the file viewer). In a follow-up, mention only new attachments or ones relevant to the new request. Workers must `cp` an attachment into their worktree only if it should become part of the repo. Never inline file contents into the prompt yourself.
 6. Update every card you acted on: status, conversation_id, manager_note, dispatched_entry_count, and append_entry comments where the user needs context. Every ticket you dispatch MUST get its conversation_id set so the card links to its conversation.
-   - **Note style rule**: manager_note and append_entry are STATUS ONLY — a few words about what happened, NEVER a description of the task itself (the card already shows the task). Good: "Worker dispatched", "Landed 37d9ab on origin/master", "Worker restarted for fix", "PR open, awaiting review". Bad: anything summarizing or paraphrasing the feature/bug. Two exceptions: deferral notes keep their short reason (see the deferral contract), and a needs_input append_entry may contain the specific question the user must answer.
+   - **Note style rule**: manager_note and append_entry are STATUS ONLY — a few words about what happened, NEVER a description of the task itself (the card already shows the task). Good: "Worker dispatched", "Push landed, checks passed", "Worker restarted for fix", "PR open, awaiting review". Bad: anything summarizing or paraphrasing the feature/bug. Two exceptions: deferral notes keep their short reason (see the deferral contract), and a needs_input append_entry may contain the specific question the user must answer.
 7. **Title rule**: every ticket you touch that has a null `title` MUST get one via `patch --title`. Format: one emoji prefix + ONE or TWO words, NEVER more than two words (e.g. "🐛 Login fix", "🎨 Dark mode", "📎 Attachments"). Keep existing titles unless the ticket's scope clearly changed.
 8. Do not wait for workers to finish — dispatch and exit. You will be re-invoked automatically when statuses change.
 

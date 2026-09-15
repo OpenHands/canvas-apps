@@ -18,15 +18,17 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 STATUSES = ("pending", "in_progress", "needs_input", "finished")
 VERIFIED = "verified"
-WORKTREE_ROOT = Path("/tmp/conversation-worktrees")
+WORKTREE_ROOT = Path(tempfile.gettempdir()) / "conversation-worktrees"
 
 
 def store_root() -> Path:
@@ -89,6 +91,10 @@ def install_cli(workspace_id: str, workspace_path: str) -> str:
     (bin_dir / "config.json").write_text(json.dumps({
         "workspace_id": workspace_id,
         "workspace_path": workspace_path,
+        "agent_server": os.environ.get("VIBE_AGENT_SERVER") or os.environ.get("AGENT_SERVER_URL", ""),
+        "canvas_base": os.environ.get("VIBE_CANVAS_BASE", ""),
+        "session_key_file": os.environ.get("VIBE_SESSION_KEY_FILE"),
+        "manager_skill_file": os.environ.get("VIBE_MANAGER_SKILL_FILE"),
         "store_dir": str(store_root()),
         "sidecar_root": str(sidecar_root()) if sidecar_root() else None,
     }, indent=2))
@@ -413,18 +419,20 @@ def _apply_ticket_patch(
 # -------------------------------------------------------------- agent server
 
 def agent_server_url() -> str:
-    return os.environ.get("AGENT_SERVER_URL", "http://127.0.0.1:18000").rstrip("/")
+    url = os.environ.get("VIBE_AGENT_SERVER") or os.environ.get("AGENT_SERVER_URL", "")
+    if not url:
+        raise RuntimeError("Configure VIBE_AGENT_SERVER or AGENT_SERVER_URL")
+    return url.rstrip("/")
 
 
 def session_key() -> str:
-    key = os.environ.get("SESSION_API_KEY") or os.environ.get("OH_SESSION_API_KEYS_0")
-    if key:
-        return key
-    # Falls back to the on-disk key the service used, for local runs.
-    for candidate in (Path.cwd() / ".session-key", Path("/root/git/vibe-manager/.session-key")):
-        if candidate.exists():
-            return candidate.read_text().strip()
-    raise RuntimeError("no agent-server session key available")
+    for name in ("VIBE_SESSION_KEY", "SESSION_API_KEY", "OH_SESSION_API_KEYS_0"):
+        if os.environ.get(name):
+            return os.environ[name]
+    filename = os.environ.get("VIBE_SESSION_KEY_FILE")
+    if filename:
+        return Path(filename).expanduser().read_text().strip()
+    raise RuntimeError("Configure server-side session credentials or VIBE_SESSION_KEY_FILE")
 
 
 def agent_request(path: str, method: str = "GET", data: dict | None = None,
@@ -451,13 +459,16 @@ def llm_profiles() -> dict:
         data = agent_request("/api/profiles", timeout=15)
     except (urllib.error.URLError, OSError, json.JSONDecodeError):
         return {"profiles": [], "active_profile": None}
-    # The list endpoint returns `model` at the top level of each profile; only
-    # GET /api/profiles/<name> nests the full LLM config under "config".
-    profiles = [
-        {"name": p.get("name"), "model": p.get("model")}
-        for p in (data.get("profiles") or [])
-    ]
-    return {"profiles": profiles, "active_profile": data.get("active_profile")}
+    return profile_catalog(data)
+
+
+def profile_catalog(data: dict) -> dict:
+    """Expose only discovery metadata, never credentials or full LLM configs."""
+    return {
+        "profiles": [{"name": p.get("name"), "model": p.get("model")}
+                     for p in (data.get("profiles") or [])],
+        "active_profile": data.get("active_profile"),
+    }
 
 
 def agent_settings_payload(llm_profile: str | None = None) -> dict:
@@ -474,7 +485,7 @@ def agent_settings_payload(llm_profile: str | None = None) -> dict:
     if llm_profile:
         try:
             profile = agent_request(
-                f"/api/profiles/{llm_profile}", extra_headers=headers, timeout=15
+                f"/api/profiles/{quote(llm_profile, safe='')}", extra_headers=headers, timeout=15
             )
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
@@ -591,7 +602,33 @@ def worktree_guidance(working_dir: str, wt: dict) -> str:
 # ---------------------------------------------------------------- dispatching
 
 def canvas_base() -> str:
-    return os.environ.get("VIBE_CANVAS_BASE", "https://canvas.rbren.io").rstrip("/")
+    return os.environ.get("VIBE_CANVAS_BASE", "").rstrip("/")
+
+
+def manager_skill_prompt(prompt: str, role: str) -> str:
+    """Load operator-owned context only for manager roles, never from a project."""
+    if role not in ("manager", "manager_chat"):
+        return prompt
+    configured = os.environ.get("VIBE_MANAGER_SKILL_FILE")
+    if configured == "":
+        return prompt
+    root = sidecar_root() or Path.home() / ".openhands/apps/kanban-manager"
+    path = Path(configured).expanduser() if configured else root / "skills/manager/SKILL.md"
+    if not configured and not path.exists():
+        return prompt
+    with path.open(encoding="utf-8") as source:
+        content = source.read(65537)
+    if len(content) > 65536:
+        raise ValueError("Manager skill exceeds 64 Ki characters")
+    if not content.strip():
+        return prompt
+    return prompt + (
+        "\n\n## Instance-local manager skill\n"
+        "Operator-owned guidance for this manager role only. Preserve the app's security, "
+        "dispatch and budget rules and explicit user model choices. Local profile preferences "
+        "apply only when those profiles are available. Manager chat must not dispatch workers.\n\n"
+        + content
+    )
 
 
 def start_conversation(
@@ -638,6 +675,7 @@ def start_conversation(
     conv_id = str(uuid.uuid4())
     # Resolve settings (and validate llm_profile) BEFORE provisioning the
     # worktree, so an unknown profile never leaks one.
+    prompt = manager_skill_prompt(prompt, role)
     settings = agent_settings_payload(llm_profile)
 
     wt = None

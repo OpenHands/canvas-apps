@@ -75,15 +75,6 @@ def add_routes(vibe, root, token, shutdown):
         except (ValueError, OSError, httpx.HTTPError, httpx.InvalidURL) as exc:
             raise HTTPException(409, str(exc)) from exc
 
-    @app.get('/api/manager/conversations/{conv_id}')
-    def conversation(conv_id: str, final_response: bool = False):
-        data = vibe.agent_get(f'/api/conversations/{conv_id}?include_skills=false', timeout=30)
-        result = {k: data.get(k) for k in ('id', 'execution_status', 'title')}
-        result['model'] = ((data.get('agent') or {}).get('llm') or {}).get('model')
-        if final_response:
-            result['final_response'] = vibe.agent_get(f'/api/conversations/{conv_id}/agent_final_response', timeout=30)
-        return result
-
     @app.post('/api/workspaces/{ws_id}/automation/start')
     def start_manager(ws_id: str):
         if not vibe.AUTOMATION_API or not vibe.AUTOMATION_KEY:

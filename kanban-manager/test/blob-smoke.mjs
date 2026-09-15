@@ -29,7 +29,7 @@ try {
     const app = await import(url);
     URL.revokeObjectURL(url);
     window.deactivate = app.activate({ apiVersion: '1', backend: { id: 'browser-fixture', kind: 'local' },
-      extension: { name: 'kanban-manager', version: '0.3.2' }, agentServer: { request: window.kanbanRequest },
+      extension: { name: 'kanban-manager', version: '0.3.3' }, agentServer: { request: window.kanbanRequest },
       registerPage(id, mount) {
         window.mount = mount;
         window.dispose = mount({ container: document.querySelector('#app'), path: 'project', navigate(path) { window.observed.paths.push(path); } });

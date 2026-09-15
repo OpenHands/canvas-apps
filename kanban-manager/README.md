@@ -11,7 +11,7 @@ agent budgets, light/dark themes and ten primary palettes are preserved.
 
 In Agent Canvas, use **Add app** with:
 
-- App source: `github:DevinVinson/canvas-apps`
+- App source: `github:OpenHands/canvas-apps`
 - Repository path: `kanban-manager`
 - Ref: the release/branch containing this version
 
@@ -67,6 +67,41 @@ paths**, never keys, in the setup form. Alternatively the backend can inherit
 `integration.json`; the browser never receives credential values or the
 sidecar's bearer token. Empty integrations still permit manual board use.
 
+### Instance-local manager skill
+
+The generic manager discovers configured profiles using `vibectl.py profiles`,
+then weighs capability, cost and task effort. Explicit user choices win. Without
+an informed alternative, new workers use the Agent Server's active default;
+follow-ups keep their current model. The App imposes no provider or model list.
+
+An operator can put local model preferences and deployment conventions in
+`~/.openhands/apps/kanban-manager/skills/manager/SKILL.md` (under the configured
+`VIBE_SIDECAR_ROOT` when overridden). The backend loads this optional UTF-8 skill
+into initial manager and manager-chat prompts, **not worker prompts**, when
+creating those conversations. It does not change the manager chat's read-only board role. New
+conversations read current content; existing conversations retain prior context
+and follow-up messages stay unchanged.
+Keep the file private and outside source checkouts; it is never included in App
+packages or automation uploads. Do not put credentials in skill text.
+
+`VIBE_MANAGER_SKILL_FILE` is a backend/operator environment override for another
+file; an empty value disables the skill. An explicitly configured missing or
+unreadable file fails rather than silently dropping policy. Skills are limited
+to 64 Ki characters. Project files and browser requests cannot set this path.
+No skill is required on other installations. The skill supplements live profile
+discovery and cannot override user selections, budgets or security boundaries.
+
+For the legacy standalone service, explicitly set `VIBE_AGENT_SERVER` (or
+`AGENT_SERVER_URL`), `VIBE_AUTOMATION_API`, `VIBE_SELF_URL` and, when absolute
+conversation links are needed, `VIBE_CANVAS_BASE`. There are no guessed service
+ports or Canvas domains. `VIBE_CORS_ORIGINS` defaults only to the configured
+Canvas URL, not arbitrary development origins. `VIBE_SESSION_KEY_FILE` and
+`VIBE_AUTOMATION_KEY_FILE` specify server-side credential paths; inherited keys
+are also supported. The service never searches a checkout for credentials.
+Existing standalone database/data paths remain unchanged; moving those requires
+an explicit migration. Operator-rendered systemd/nginx examples in the source
+repository are not installed or shipped in the Canvas App.
+
 ### HTTP gateway contract (deployment prerequisite)
 
 Board, settings, manager/chat, migration, readiness and attachment requests use
@@ -77,27 +112,26 @@ sidecar bearer. **Normal mounting, polling and board operations execute no
 shell commands.** Host API 1 still has no native sidecar proxy: this prefix is an
 explicit deployment adapter, not an invented portable Canvas capability.
 
-Select the **nginx-facing backend URL** in Canvas's backend settings. On the
-requesting deployment it is `https://canvas.rbren.io`, with the gateway at
-`https://canvas.rbren.io/kanban-manager`. Direct Agent Server ports and the
-frontend's internal development port do not implement this route. A 401, missing
-route, HTML response, or unavailable sidecar is a visible recoverable error.
-The App never bypasses authentication or silently changes its data transport.
+Select the **gateway-facing backend URL** configured by your operator in Canvas's
+backend settings. Direct Agent Server ports and a frontend development server do
+not inherently implement this route. A 401, missing route, HTML response, or
+unavailable sidecar is a visible recoverable error. The App never bypasses
+authentication or silently changes its data transport.
 
 The operator-owned gateway must:
 
 - authenticate `X-Session-API-Key` against the owning Agent Server before proxying
-  (this deployment uses nginx `auth_request` to protected `/api/file/home`;
+  (for example, nginx `auth_request` to protected `/api/file/home`;
   `/server_info` is public and is not an authentication check);
 - strip the browser's session key and cookies, inject the private sidecar bearer
   server-side, and route only to its registered loopback listener;
 - strip `/kanban-manager`, preserve methods/query strings/JSON bodies, support
   the API allowlist in `sidecar/runtime.py`, and reject credential-export and
   internal shutdown endpoints;
-- maintain its upstream as the sidecar's port and bearer rotate. On this
-  deployment, run `/etc/nginx/refresh-kanban-manager.py` as root after each
-  sidecar start/repair. This is a machine-provisioned helper, not part of the App
-  installer, and no automatic nginx watcher is installed.
+- maintain its upstream as the sidecar's port and bearer rotate. The operator
+  must refresh the gateway after each sidecar start/repair, using their own
+  deployment adapter. Gateway provisioning and service supervision are not part
+  of the App installer.
 
 See the [host request API](https://github.com/OpenHands/OpenHands/blob/main/src/types/canvas-extension.ts)
 and [sidecar deployment contract](https://github.com/DevinVinson/skills/blob/main/skills/canvas-extension-api/references/sidecar-pattern.md).

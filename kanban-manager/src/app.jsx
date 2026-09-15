@@ -126,7 +126,7 @@ export function App({ host, context }) {
         {Object.entries({ agent_server: 'Agent Server URL', automation_api: 'Automation API URL (including /api/automation)', session_key_file: 'Agent Server session key file (absolute path, optional if inherited)', automation_key_file: 'Automation key file (optional if inherited)', canvas_base: 'Canvas URL (optional; blank uses relative conversation links)' }).map(([key, label]) =>
           <label key={key}>{label}<input value={integration[key] || ''} onChange={event => setIntegration({ ...integration, [key]: event.target.value })} /></label>)}
       </fieldset>
-      <p>Data transport: authenticated HTTP through /kanban-manager/api on the selected backend. Select the nginx-facing backend URL (https://canvas.rbren.io on this deployment). No board data uses shell commands. Backend setup, install, start and stop still use the approved command bridge.</p>
+      <p>Data transport: authenticated HTTP through /kanban-manager/api on the selected backend. Select the backend URL where your operator has provisioned this gateway. No board data uses shell commands. Backend setup, install, start and stop still use the approved command bridge.</p>
       <p>Credentials stay on the backend. Enter file paths, never secret values. Missing integrations do not prevent manual board use.</p>
       <label><input type="checkbox" checked={approved} onChange={event => setApproved(event.target.checked)} /> I approve the described downloads, private files and background process.</label>
       <div className="backend-actions">

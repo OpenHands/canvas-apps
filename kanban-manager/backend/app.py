@@ -15,14 +15,17 @@ import json
 import logging
 import os
 import re
+import shlex
 import sqlite3
 import subprocess
 import tarfile
+import tempfile
 import threading
 import time
 import uuid
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 import websockets
@@ -32,6 +35,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from automation import vibestore
+
 log = logging.getLogger("vibe")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -40,20 +45,22 @@ DB_PATH = Path(os.environ.get("VIBE_DB_PATH", str(ROOT / "vibe.db")))
 DATA_DIR = Path(os.environ.get("VIBE_DATA_DIR", str(ROOT / "data")))
 ATTACHMENTS_DIR = DATA_DIR / "attachments"
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
-AGENT_SERVER = os.environ.get("VIBE_AGENT_SERVER", "http://127.0.0.1:18000")
-AUTOMATION_API = os.environ.get("VIBE_AUTOMATION_API", "http://127.0.0.1:18001/api/automation")
-VIBE_API = os.environ.get("VIBE_SELF_URL", "http://127.0.0.1:18300")
-CANVAS_BASE = os.environ.get("VIBE_CANVAS_BASE", "https://canvas.rbren.io")
+AGENT_SERVER = os.environ.get("VIBE_AGENT_SERVER", os.environ.get("AGENT_SERVER_URL", "")).rstrip("/")
+AUTOMATION_API = os.environ.get("VIBE_AUTOMATION_API", "").rstrip("/")
+VIBE_API = os.environ.get("VIBE_SELF_URL", "").rstrip("/")
+CANVAS_BASE = os.environ.get("VIBE_CANVAS_BASE", "").rstrip("/")
 
-def configured_key(env: str, filename: str) -> str:
+def configured_key(env: str, *inherited: str) -> str:
     if env in os.environ:
         return os.environ[env]
-    path = Path(os.environ.get(env + "_FILE", str(ROOT / filename)))
-    return path.read_text().strip() if path.is_file() else ""
+    filename = os.environ.get(env + "_FILE")
+    if filename:
+        return Path(filename).expanduser().read_text().strip()
+    return next((os.environ[k] for k in inherited if os.environ.get(k)), "")
 
 
-SESSION_KEY = configured_key("VIBE_SESSION_KEY", ".session-key")
-AUTOMATION_KEY = configured_key("VIBE_AUTOMATION_KEY", ".automation-key")
+SESSION_KEY = configured_key("VIBE_SESSION_KEY", "SESSION_API_KEY", "OH_SESSION_API_KEYS_0")
+AUTOMATION_KEY = configured_key("VIBE_AUTOMATION_KEY", "OPENHANDS_AUTOMATION_API_KEY")
 
 STATUSES = ["pending", "in_progress", "needs_input", "finished"]
 UNFINISHED_STATUSES = ("pending", "in_progress", "needs_input")
@@ -100,7 +107,7 @@ app = FastAPI(title="Kanban Manager", lifespan=lifespan)
 CORS_ORIGINS = [
     o.strip()
     for o in os.environ.get(
-        "VIBE_CORS_ORIGINS", f"{CANVAS_BASE},http://localhost:8000,http://127.0.0.1:8000"
+        "VIBE_CORS_ORIGINS", CANVAS_BASE
     ).split(",")
     if o.strip()
 ]
@@ -1118,13 +1125,23 @@ def _llm_profiles() -> dict:
         timeout=15,
     )
     r.raise_for_status()
-    return r.json()
+    return vibestore.profile_catalog(r.json())
 
 
 @app.get("/api/manager/llm-profiles")
 def manager_llm_profiles():
     """Model choices for the Manager: the agent server's configured profiles."""
     return _llm_profiles()
+
+
+@app.get('/api/manager/conversations/{conv_id}')
+def conversation(conv_id: str, final_response: bool = False):
+    data = agent_get(f'/api/conversations/{conv_id}?include_skills=false', timeout=30)
+    result = {k: data.get(k) for k in ('id', 'execution_status', 'title')}
+    result['model'] = ((data.get('agent') or {}).get('llm') or {}).get('model')
+    if final_response:
+        result['final_response'] = agent_get(f'/api/conversations/{conv_id}/agent_final_response', timeout=30)
+    return result
 
 
 def _agent_settings_payload(llm_profile: str | None = None) -> dict:
@@ -1146,7 +1163,7 @@ def _agent_settings_payload(llm_profile: str | None = None) -> dict:
     settings["tools"] = None
     if llm_profile:
         pr = httpx.get(
-            f"{AGENT_SERVER}/api/profiles/{llm_profile}", headers=headers, timeout=15
+            f"{AGENT_SERVER}/api/profiles/{quote(llm_profile, safe='')}", headers=headers, timeout=15
         )
         if pr.status_code == 404:
             names = [p["name"] for p in _llm_profiles().get("profiles", [])]
@@ -1186,7 +1203,7 @@ def _ensure_workspace_tags(client: httpx.Client, headers: dict, req: StartConver
         pass  # tagging is cosmetic; never fail the follow-up over it
 
 
-WORKTREE_ROOT = Path("/tmp/conversation-worktrees")
+WORKTREE_ROOT = Path(tempfile.gettempdir()) / "conversation-worktrees"
 
 
 def _git(project: Path, *args: str) -> subprocess.CompletedProcess:
@@ -1356,6 +1373,7 @@ def manager_start_conversation(req: StartConversation):
         conv_id = str(uuid.uuid4())
         # Resolve settings (and validate llm_profile — 400s on an unknown
         # name) BEFORE provisioning the worktree so we never leak one.
+        prompt = vibestore.manager_skill_prompt(prompt, req.role)
         agent_settings = _agent_settings_payload(llm_profile)
         if req.worktree:
             wt = _provision_worker_worktree(req.working_dir, conv_id)
@@ -1454,31 +1472,28 @@ You are the **Vibe Manager** for the project at `{path}` (workspace id `{ws_id}`
 5. Leave the checkout clean: `git add AGENTS.md && git commit -m "Manager: <short>"` after editing, and push it (this workspace lands work via {push}). Never touch other files, and never commit someone else's work in progress.
 
 ## Reading the board
-No auth is needed for the vibe API from this machine:
+Use the configured backend endpoints with deployment-approved authentication. Never print credentials or assume a public, unauthenticated service:
 - Board: `curl -s {VIBE_API}/api/manager/workspaces/{ws_id}/snapshot`
   Each ticket has `status` (pending/in_progress/needs_input/finished/verified), `entries` (the request text, oldest first), `sort_order` (the user's priority inside a column, lower first), `title`, `manager_note`, `conversation_id`, `pr_url`, `attachments` and — while a worker is running — `conversation_status` and `latest_action` (what the agent is doing right now).
 - Dispatcher health: `curl -s {VIBE_API}/api/workspaces/{ws_id}/automation`
   Says whether the manager automation is enabled, when it last ran, whether a run failed, and what the manager conversation is doing.
 
 ## Reading the conversations on the board
-Every dispatched ticket has a worker conversation on the agent server. Fetch the credentials once:
-`curl -s {VIBE_API}/api/manager/agent-credentials` → `agent_server` + `session_api_key`.
-Then, with `-H "X-Session-API-Key: <session_api_key>"`:
-- `GET <agent_server>/api/conversations/<conversation_id>?include_skills=false` → `execution_status` (running|idle|finished|error|stuck|paused) and `agent.llm.model`.
-- `GET <agent_server>/api/conversations/<conversation_id>/events/search?sort_order=TIMESTAMP_DESC&limit=20` → the recent events: `MessageEvent`s carry the agent's own words in `llm_message.content[].text`, `ActionEvent`s the commands it ran.
+Use the backend's conversation summary endpoint; it handles Agent Server credentials server-side:
+- `GET {VIBE_API}/api/manager/conversations/<conversation_id>?final_response=true` → `execution_status`, `model` and `final_response`.
+Never read credential files or request credential-export endpoints.
 
 ## Right now
 Read `AGENTS.md` and the board snapshot, then greet the user in ONE sentence that says where the board stands (e.g. "3 queued, 1 agent working"). Then wait — answer what they ask, record what they request."""
 
     if os.environ.get("VIBE_SIDECAR_ROOT"):
-        from automation import vibestore
         cli = vibestore.install_cli(ws_id, path)
         begin = skill.index("## Reading the board")
         end = skill.index("## Right now")
         skill = skill[:begin] + f"""## Reading the board and conversations
 Use the authenticated manager CLI; never read credential files or write the database directly.
-- `python3 {cli} snapshot` — full board, settings, ticket history, attachments and worker status.
-- `python3 {cli} conversation <conversation_id> --final-response` — worker status and final report.
+- `python3 {shlex.quote(cli)} snapshot` — full board, settings, ticket history, attachments and worker status.
+- `python3 {shlex.quote(cli)} conversation <conversation_id> --final-response` — worker status and final report.
 The cron manager owns dispatch; this chat only reads the board.
 
 """ + skill[end:]
@@ -1692,6 +1707,8 @@ def build_manager_tarball(ws: dict) -> bytes:
             "sidecar_root": os.environ.get("VIBE_SIDECAR_ROOT"),
             "agent_server": AGENT_SERVER,
             "canvas_base": CANVAS_BASE,
+            "session_key_file": os.environ.get("VIBE_SESSION_KEY_FILE"),
+            "manager_skill_file": os.environ.get("VIBE_MANAGER_SKILL_FILE"),
         },
         indent=2,
     ).encode()

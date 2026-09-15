@@ -50,7 +50,7 @@ export const BOARD_MARKUP = `
           <span class="control-label">Where changes land</span>
           <div class="seg" id="push-mode" role="group" aria-label="Where changes land">
             <button type="button" data-mode="pr" class="seg-btn">Pull request</button>
-            <button type="button" data-mode="main" class="seg-btn">Push to main</button>
+            <button type="button" data-mode="main" class="seg-btn">Push to default</button>
           </div>
         </div>
       </div>

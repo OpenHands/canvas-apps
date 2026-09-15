@@ -49,6 +49,11 @@ if DEFAULTS.get("sidecar_root"):
 if DEFAULTS.get("store_dir"):
     os.environ.setdefault("VIBE_STORE_DIR", DEFAULTS["store_dir"])
 
+for field, env in (("agent_server", "AGENT_SERVER_URL"), ("canvas_base", "VIBE_CANVAS_BASE"),
+                   ("session_key_file", "VIBE_SESSION_KEY_FILE"), ("manager_skill_file", "VIBE_MANAGER_SKILL_FILE")):
+    if DEFAULTS.get(field) is not None:
+        os.environ.setdefault(env, DEFAULTS[field])
+
 import vibestore  # noqa: E402 - VIBE_STORE_DIR must be set first
 
 

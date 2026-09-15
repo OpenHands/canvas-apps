@@ -15,7 +15,7 @@ import time
 import urllib.error
 import urllib.request
 
-VERSION = '0.3.2'
+VERSION = '0.3.3'
 _children: dict[int, subprocess.Popen] = {}
 ROUTE = re.compile(r'^/api/(?:health|runtime|workspaces(?:/[A-Za-z0-9_-]+(?:/(?:board|tickets|reorder|automation(?:/(?:start|stop|trigger))?|manager-chat(?:/[A-Za-z0-9_-]+/messages)?))?)?|tickets/[A-Za-z0-9_-]+/(?:entries|verify|attachments)|attachments/[A-Za-z0-9_-]+|uploads(?:/[A-Za-z0-9_-]+(?:/finish)?)?|manager/(?:llm-profiles|conversations(?:/[A-Za-z0-9_-]+)?|workspaces/[A-Za-z0-9_-]+/snapshot|tickets/[A-Za-z0-9_-]+))$')
 

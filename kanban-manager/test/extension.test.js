@@ -57,7 +57,7 @@ function mount(path = 'project', target = backend) {
   const registered = new Map();
   const navigations = [];
   const host = { apiVersion: '1', backend: { id: 'fixture', kind: 'local', orgId: null },
-    extension: { name: 'kanban-manager', version: '0.3.2' },
+    extension: { name: 'kanban-manager', version: '0.3.3' },
     agentServer: { request: request => target.request(request) },
     registerPage(id, fn) { registered.set(id, fn); return () => registered.delete(id); },
     navigate() {},
@@ -75,6 +75,7 @@ test('built React App registers, restores SQLite board, submits, persists prefer
     assert.equal(app.registered.size, 1);
     await until(() => app.container.textContent.includes('Preserved request'));
     assert.equal(app.container.querySelector('.backend-bar'), null);
+    assert.equal(app.container.querySelector('[data-mode="main"]').textContent, 'Push to default');
     assert.equal(app.container.querySelector('.vibe-ext[data-theme="light"]').dataset.accent, 'iris');
     await until(() => app.container.querySelector('.workspace-indicator'));
     const indicator = app.container.querySelector('.workspace-indicator');
