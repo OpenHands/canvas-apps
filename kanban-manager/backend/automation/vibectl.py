@@ -43,8 +43,16 @@ def _defaults() -> dict:
 DEFAULTS = _defaults()
 # Must be set before vibestore is imported: it resolves the store root lazily,
 # but every command below depends on pointing at the right store.
+if DEFAULTS.get("sidecar_root"):
+    os.environ.setdefault("VIBE_SIDECAR_ROOT", DEFAULTS["sidecar_root"])
+
 if DEFAULTS.get("store_dir"):
     os.environ.setdefault("VIBE_STORE_DIR", DEFAULTS["store_dir"])
+
+for field, env in (("agent_server", "AGENT_SERVER_URL"), ("canvas_base", "VIBE_CANVAS_BASE"),
+                   ("session_key_file", "VIBE_SESSION_KEY_FILE"), ("manager_skill_file", "VIBE_MANAGER_SKILL_FILE")):
+    if DEFAULTS.get(field) is not None:
+        os.environ.setdefault(env, DEFAULTS[field])
 
 import vibestore  # noqa: E402 - VIBE_STORE_DIR must be set first
 
@@ -113,6 +121,9 @@ def cmd_profiles(args) -> int:
 
 
 def cmd_conversation(args) -> int:
+    if vibestore.sidecar_root():
+        return _out(vibestore.sidecar_request(
+            f"/api/manager/conversations/{args.conversation_id}?final_response={str(args.final_response).lower()}"))
     conv = vibestore.agent_request(
         f"/api/conversations/{args.conversation_id}?include_skills=false", timeout=30
     )

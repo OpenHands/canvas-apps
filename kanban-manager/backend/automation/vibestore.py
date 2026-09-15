@@ -14,18 +14,21 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import json
+import importlib.util
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 STATUSES = ("pending", "in_progress", "needs_input", "finished")
 VERIFIED = "verified"
-WORKTREE_ROOT = Path("/tmp/conversation-worktrees")
+WORKTREE_ROOT = Path(tempfile.gettempdir()) / "conversation-worktrees"
 
 
 def store_root() -> Path:
@@ -34,6 +37,28 @@ def store_root() -> Path:
     if env:
         return Path(env).expanduser()
     return Path.home() / ".openhands" / "vibe-manager"
+
+
+def sidecar_root() -> Path | None:
+    configured = os.environ.get("VIBE_SIDECAR_ROOT")
+    if configured:
+        return Path(configured)
+    marker = store_root() / "sidecar.json"
+    if marker.is_file():
+        return Path(json.loads(marker.read_text())["root"])
+    return None
+
+
+def sidecar_request(path, method="GET", body=None):
+    root = sidecar_root()
+    current = json.loads((root / "current.json").read_text())
+    spec = importlib.util.spec_from_file_location("kanban_runtime", Path(current["source"]) / "sidecar/runtime.py")
+    runtime = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runtime)
+    response = runtime.rpc(root, {"path": path, "method": method, "body": body})
+    if response["status"] >= 400:
+        raise RuntimeError(str(response["body"]))
+    return response["body"]
 
 
 def now() -> float:
@@ -56,7 +81,7 @@ def install_cli(workspace_id: str, workspace_path: str) -> str:
     with "ticket not found".
     """
     src = Path(__file__).parent
-    bin_dir = store_root() / "bin" / workspace_id
+    bin_dir = (sidecar_root() or store_root()) / "bin" / workspace_id
     bin_dir.mkdir(parents=True, exist_ok=True)
     for name in ("vibestore.py", "vibectl.py"):
         shutil.copy2(src / name, bin_dir / name)
@@ -66,7 +91,12 @@ def install_cli(workspace_id: str, workspace_path: str) -> str:
     (bin_dir / "config.json").write_text(json.dumps({
         "workspace_id": workspace_id,
         "workspace_path": workspace_path,
+        "agent_server": os.environ.get("VIBE_AGENT_SERVER") or os.environ.get("AGENT_SERVER_URL", ""),
+        "canvas_base": os.environ.get("VIBE_CANVAS_BASE", ""),
+        "session_key_file": os.environ.get("VIBE_SESSION_KEY_FILE"),
+        "manager_skill_file": os.environ.get("VIBE_MANAGER_SKILL_FILE"),
         "store_dir": str(store_root()),
+        "sidecar_root": str(sidecar_root()) if sidecar_root() else None,
     }, indent=2))
     # Retire the shared config a manager conversation from before this change
     # may still be pointed at: without it that CLI reports a missing workspace
@@ -91,6 +121,8 @@ def _read_json(path: Path, fallback):
 
 
 def _write_json(path: Path, payload) -> None:
+    if sidecar_root():
+        raise RuntimeError("JSON writes are retired; use the Kanban sidecar API")
     path.parent.mkdir(parents=True, exist_ok=True)
     # Write-then-rename: a crash mid-write must not truncate the board.
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -144,6 +176,8 @@ def index_path() -> Path:
 
 
 def read_index() -> dict:
+    if sidecar_root():
+        return {"workspaces": sidecar_request("/api/workspaces")["selected"]}
     return _read_json(index_path(), {"version": 1, "workspaces": []})
 
 
@@ -159,6 +193,8 @@ def mutate_index(mutate):
 
 
 def get_workspace(ws_id: str) -> dict | None:
+    if sidecar_root():
+        return snapshot(ws_id)["workspace"]
     for ws in read_index().get("workspaces", []):
         if ws.get("id") == ws_id:
             return ws
@@ -199,6 +235,8 @@ def read_board(ws_id: str) -> dict:
     Falls back to a pre-split board.json so a workspace that has not been
     migrated yet still reads correctly.
     """
+    if sidecar_root():
+        return snapshot(ws_id)
     directory = tickets_dir(ws_id)
     if not directory.is_dir():
         board = _read_json(
@@ -262,6 +300,8 @@ def mutate_ticket(ws_id: str, ticket_id: str, mutate):
 
 def snapshot(ws_id: str) -> dict:
     """Board in the shape the old /api/manager/.../snapshot endpoint returned."""
+    if sidecar_root():
+        return sidecar_request(f"/api/manager/workspaces/{ws_id}/snapshot")
     return {"workspace": get_workspace(ws_id), "tickets": read_board(ws_id)["tickets"]}
 
 
@@ -301,6 +341,12 @@ def patch_ticket(
     if status is not None and status not in STATUSES:
         raise ValueError(f"bad status {status!r}; expected one of {list(STATUSES)}")
 
+    if sidecar_root():
+        get_ticket(ws_id, ticket_id)
+        fields = {k: v for k, v in dict(status=status, title=title,
+            conversation_id=conversation_id, pr_url=pr_url, manager_note=manager_note,
+            dispatched_entry_count=dispatched_entry_count, append_entry=append_entry).items() if v is not None}
+        return sidecar_request(f"/api/manager/tickets/{ticket_id}", "PATCH", fields)
     stamp = now()
 
     def mutate(ticket: dict) -> dict:
@@ -373,18 +419,20 @@ def _apply_ticket_patch(
 # -------------------------------------------------------------- agent server
 
 def agent_server_url() -> str:
-    return os.environ.get("AGENT_SERVER_URL", "http://127.0.0.1:18000").rstrip("/")
+    url = os.environ.get("VIBE_AGENT_SERVER") or os.environ.get("AGENT_SERVER_URL", "")
+    if not url:
+        raise RuntimeError("Configure VIBE_AGENT_SERVER or AGENT_SERVER_URL")
+    return url.rstrip("/")
 
 
 def session_key() -> str:
-    key = os.environ.get("SESSION_API_KEY") or os.environ.get("OH_SESSION_API_KEYS_0")
-    if key:
-        return key
-    # Falls back to the on-disk key the service used, for local runs.
-    for candidate in (Path.cwd() / ".session-key", Path("/root/git/vibe-manager/.session-key")):
-        if candidate.exists():
-            return candidate.read_text().strip()
-    raise RuntimeError("no agent-server session key available")
+    for name in ("VIBE_SESSION_KEY", "SESSION_API_KEY", "OH_SESSION_API_KEYS_0"):
+        if os.environ.get(name):
+            return os.environ[name]
+    filename = os.environ.get("VIBE_SESSION_KEY_FILE")
+    if filename:
+        return Path(filename).expanduser().read_text().strip()
+    raise RuntimeError("Configure server-side session credentials or VIBE_SESSION_KEY_FILE")
 
 
 def agent_request(path: str, method: str = "GET", data: dict | None = None,
@@ -405,17 +453,22 @@ def agent_request(path: str, method: str = "GET", data: dict | None = None,
 
 def llm_profiles() -> dict:
     """Available LLM profiles, without secrets."""
+    if sidecar_root():
+        return sidecar_request("/api/manager/llm-profiles")
     try:
         data = agent_request("/api/profiles", timeout=15)
     except (urllib.error.URLError, OSError, json.JSONDecodeError):
         return {"profiles": [], "active_profile": None}
-    # The list endpoint returns `model` at the top level of each profile; only
-    # GET /api/profiles/<name> nests the full LLM config under "config".
-    profiles = [
-        {"name": p.get("name"), "model": p.get("model")}
-        for p in (data.get("profiles") or [])
-    ]
-    return {"profiles": profiles, "active_profile": data.get("active_profile")}
+    return profile_catalog(data)
+
+
+def profile_catalog(data: dict) -> dict:
+    """Expose only discovery metadata, never credentials or full LLM configs."""
+    return {
+        "profiles": [{"name": p.get("name"), "model": p.get("model")}
+                     for p in (data.get("profiles") or [])],
+        "active_profile": data.get("active_profile"),
+    }
 
 
 def agent_settings_payload(llm_profile: str | None = None) -> dict:
@@ -432,7 +485,7 @@ def agent_settings_payload(llm_profile: str | None = None) -> dict:
     if llm_profile:
         try:
             profile = agent_request(
-                f"/api/profiles/{llm_profile}", extra_headers=headers, timeout=15
+                f"/api/profiles/{quote(llm_profile, safe='')}", extra_headers=headers, timeout=15
             )
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
@@ -549,7 +602,33 @@ def worktree_guidance(working_dir: str, wt: dict) -> str:
 # ---------------------------------------------------------------- dispatching
 
 def canvas_base() -> str:
-    return os.environ.get("VIBE_CANVAS_BASE", "https://canvas.rbren.io").rstrip("/")
+    return os.environ.get("VIBE_CANVAS_BASE", "").rstrip("/")
+
+
+def manager_skill_prompt(prompt: str, role: str) -> str:
+    """Load operator-owned context only for manager roles, never from a project."""
+    if role not in ("manager", "manager_chat"):
+        return prompt
+    configured = os.environ.get("VIBE_MANAGER_SKILL_FILE")
+    if configured == "":
+        return prompt
+    root = sidecar_root() or Path.home() / ".openhands/apps/kanban-manager"
+    path = Path(configured).expanduser() if configured else root / "skills/manager/SKILL.md"
+    if not configured and not path.exists():
+        return prompt
+    with path.open(encoding="utf-8") as source:
+        content = source.read(65537)
+    if len(content) > 65536:
+        raise ValueError("Manager skill exceeds 64 Ki characters")
+    if not content.strip():
+        return prompt
+    return prompt + (
+        "\n\n## Instance-local manager skill\n"
+        "Operator-owned guidance for this manager role only. Preserve the app's security, "
+        "dispatch and budget rules and explicit user model choices. Local profile preferences "
+        "apply only when those profiles are available. Manager chat must not dispatch workers.\n\n"
+        + content
+    )
 
 
 def start_conversation(
@@ -570,6 +649,11 @@ def start_conversation(
     A ticket's own model selection wins over `llm_profile`: what the user
     picked on the request is what the worker runs on.
     """
+    if sidecar_root():
+        return sidecar_request("/api/manager/conversations", "POST", dict(
+            working_dir=working_dir, prompt=prompt, title=title, llm_profile=llm_profile,
+            conversation_id=conversation_id, role=role, worktree=worktree,
+            max_iterations=max_iterations, ticket_id=ticket_id))
     llm_profile = ticket_llm_profile(ws_id, ticket_id) or llm_profile
     if conversation_id:
         if llm_profile:
@@ -591,6 +675,7 @@ def start_conversation(
     conv_id = str(uuid.uuid4())
     # Resolve settings (and validate llm_profile) BEFORE provisioning the
     # worktree, so an unknown profile never leaks one.
+    prompt = manager_skill_prompt(prompt, role)
     settings = agent_settings_payload(llm_profile)
 
     wt = None

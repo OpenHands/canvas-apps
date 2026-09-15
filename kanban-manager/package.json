@@ -1,17 +1,22 @@
 {
-  "name": "kanban-manager-canvas-extension",
-  "version": "0.2.0",
+  "name": "kanban-manager",
+  "version": "0.3.3",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --test test/extension.test.js test/manager.test.mjs",
-    "check": "npm run build && npm test"
+    "test": "node --test test/*.test.js",
+    "check": "npm run build && npm test && node test/blob-smoke.mjs"
+  },
+  "dependencies": {
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
   },
   "devDependencies": {
-    "esbuild": "^0.25.0",
-    "linkedom": "^0.18.0",
-    "postcss": "^8.4.0",
-    "postcss-prefix-selector": "^2.1.0"
+    "esbuild": "0.25.5",
+    "linkedom": "0.18.12",
+    "postcss": "8.5.28",
+    "postcss-prefix-selector": "2.1.1",
+    "puppeteer-core": "25.11.0"
   }
 }

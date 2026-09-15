@@ -2,8 +2,8 @@
   "schema_version": 1,
   "name": "kanban-manager",
   "display_name": "Kanban Manager",
-  "version": "0.2.0",
-  "description": "Agent dispatch board: queue work, watch agents pick it up, review what lands.",
+  "version": "0.3.3",
+  "description": "React agent dispatch board with an installable FastAPI backend and SQLite persistence.",
   "entrypoint": "extension.js",
   "contributes": {
     "pages": [
