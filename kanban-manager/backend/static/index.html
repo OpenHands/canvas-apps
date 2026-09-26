@@ -1,16 +1,27 @@
-/* The SPA's static/index.html body, as a template string.
-
-   The extension has no HTML file of its own: Canvas hands us a bare container
-   and we fill it. Keeping this as one template (rather than hand-built DOM)
-   makes it easy to diff against static/index.html when that changes.
-
-   Two controls are extension-only and have no counterpart in index.html: the
-   #api-setup screen (the SPA is served by the API it talks to, so it never has
-   to explain that the backend is missing) and the #mgr-stop segment of the
-   manager group (the SPA's manager automation is created and owned by app.py,
-   not by the browser). */
-
-export const BOARD_MARKUP = `
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vibe — agent dispatch board</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23131120'/%3E%3Crect x='7' y='8' width='4' height='16' rx='2' fill='%233FD8C8'/%3E%3Crect x='14' y='8' width='4' height='16' rx='2' fill='%23FFB454'/%3E%3Crect x='21' y='8' width='4' height='16' rx='2' fill='%23A794FF'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..700&family=Public+Sans:wght@400;500;600&family=Azeret+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/style.css">
+<script>
+  // Paint-time hints only: the real theme and primary colour are workspace
+  // settings on the server, mirrored here so the first paint doesn't flash
+  // dark→light / colour→colour. Both are re-applied from the workspace once
+  // the board loads; an unknown accent falls back to the default palette.
+  var vibeTheme = localStorage.getItem("vibe.theme.hint")
+    ?? localStorage.getItem("vibe.theme");
+  if (vibeTheme === "light") document.documentElement.dataset.theme = "light";
+  var vibeAccent = localStorage.getItem("vibe.accent");
+  if (vibeAccent) document.documentElement.dataset.accent = vibeAccent;
+</script>
+</head>
+<body>
 <header class="topbar">
   <div class="topbar-controls">
     <div class="control control-workspace">
@@ -30,6 +41,7 @@ export const BOARD_MARKUP = `
     </div>
     <button id="manager-chat-open" class="ghost-btn talk-btn" hidden
             title="Chat with the manager about this board">Talk to the manager</button>
+    <button id="theme-toggle" class="ghost-btn theme-toggle" title="Switch to light mode" aria-label="Switch colour theme">Light</button>
     <div class="control control-settings" id="ctl-settings" hidden>
       <button type="button" id="settings-toggle" class="ghost-btn settings-btn"
               aria-haspopup="true" aria-expanded="false"
@@ -60,24 +72,12 @@ export const BOARD_MARKUP = `
            title="Manager automation is watching this workspace&#10;Click to run the manager now">
         <span class="pulse" id="mgr-dot"></span> <span id="mgr-text">manager</span>
       </div>
-      <button type="button" id="mgr-stop" class="mgr-stop" hidden
-              title="Disable the manager automation for this workspace">Stop</button>
     </div>
   </div>
 </header>
 
 <main id="main">
-  <section id="api-setup" hidden>
-    <div class="empty-inner">
-      <p class="eyebrow">Board unavailable</p>
-      <h1>Can't reach the Kanban backend</h1>
-      <p class="empty-copy">Open Backend setup to check the sidecar. Your SQLite board is kept on the selected Agent Server.</p>
-      <p class="api-setup-error" id="api-setup-error" hidden></p>
-      <button type="button" id="api-retry">Retry</button>
-    </div>
-  </section>
-
-  <section id="empty-state" hidden>
+  <section id="empty-state">
     <div class="empty-inner">
       <div class="empty-lanes" aria-hidden="true">
         <span class="lane-swatch" data-lane="pending"></span>
@@ -199,7 +199,7 @@ export const BOARD_MARKUP = `
         <span class="eyebrow">Talk to the manager</span>
         <div class="chat-activity" id="manager-chat-activity"></div>
       </div>
-      <a class="chip convo" id="manager-chat-link" hidden>↗ open conversation</a>
+      <a class="chip convo" id="manager-chat-link" target="_blank" rel="noopener" hidden>↗ open conversation</a>
       <button class="drawer-close" id="manager-chat-close" aria-label="Close">✕</button>
     </div>
     <div class="chat-log" id="manager-chat-log" aria-live="polite"></div>
@@ -212,4 +212,7 @@ export const BOARD_MARKUP = `
     </form>
   </div>
 </aside>
-`;
+
+<script src="/assets/app.js"></script>
+</body>
+</html>

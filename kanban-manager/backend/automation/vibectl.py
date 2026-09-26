@@ -11,9 +11,11 @@ without parsing prose.
 
     vibectl.py snapshot
     vibectl.py patch <ticket_id> --status in_progress --title "🐛 Fix login"
-    vibectl.py dispatch --ticket <ticket_id> --prompt-file task.md --title "🎫 Fix login"
-    vibectl.py followup <conversation_id> --prompt-file msg.md
-    vibectl.py profiles
+    vibectl.py dispatch --ticket <ticket_id> --prompt-file task.md --agent-profile <name>
+    vibectl.py dispatch --ticket <ticket_id> --prompt-file task.md --llm-profile <name>
+    vibectl.py followup <conversation_id> --prompt-file msg.md --llm-profile <name>
+    vibectl.py agent-profiles
+    vibectl.py llm-profiles
     vibectl.py conversation <conversation_id>
 """
 
@@ -43,8 +45,16 @@ def _defaults() -> dict:
 DEFAULTS = _defaults()
 # Must be set before vibestore is imported: it resolves the store root lazily,
 # but every command below depends on pointing at the right store.
+if DEFAULTS.get("sidecar_root"):
+    os.environ.setdefault("VIBE_SIDECAR_ROOT", DEFAULTS["sidecar_root"])
+
 if DEFAULTS.get("store_dir"):
     os.environ.setdefault("VIBE_STORE_DIR", DEFAULTS["store_dir"])
+
+for field, env in (("agent_server", "AGENT_SERVER_URL"), ("canvas_base", "VIBE_CANVAS_BASE"),
+                   ("session_key_file", "VIBE_SESSION_KEY_FILE"), ("manager_skill_file", "VIBE_MANAGER_SKILL_FILE")):
+    if DEFAULTS.get(field) is not None:
+        os.environ.setdefault(env, DEFAULTS[field])
 
 import vibestore  # noqa: E402 - VIBE_STORE_DIR must be set first
 
@@ -89,7 +99,8 @@ def cmd_dispatch(args) -> int:
         args.working_dir,
         _read_prompt(args),
         title=args.title,
-        llm_profile=args.profile,
+        llm_profile=args.llm_profile,
+        agent_profile=args.agent_profile,
         role=args.role,
         worktree=not args.no_worktree,
         ws_id=args.workspace_id,
@@ -101,18 +112,26 @@ def cmd_followup(args) -> int:
     return _out(vibestore.start_conversation(
         args.working_dir,
         _read_prompt(args),
-        llm_profile=args.profile,
+        llm_profile=args.llm_profile,
+        agent_profile=args.agent_profile,
         conversation_id=args.conversation_id,
         ws_id=args.workspace_id,
         ticket_id=args.ticket,
     ))
 
 
-def cmd_profiles(args) -> int:
+def cmd_llm_profiles(args) -> int:
     return _out(vibestore.llm_profiles())
 
 
+def cmd_agent_profiles(args) -> int:
+    return _out(vibestore.agent_profiles())
+
+
 def cmd_conversation(args) -> int:
+    if vibestore.sidecar_root():
+        return _out(vibestore.sidecar_request(
+            f"/api/manager/conversations/{args.conversation_id}?final_response={str(args.final_response).lower()}"))
     conv = vibestore.agent_request(
         f"/api/conversations/{args.conversation_id}?include_skills=false", timeout=30
     )
@@ -159,9 +178,16 @@ def build_parser() -> argparse.ArgumentParser:
     dispatch.add_argument("--prompt")
     dispatch.add_argument("--prompt-file")
     dispatch.add_argument("--title")
-    dispatch.add_argument("--profile", help="LLM profile name")
-    dispatch.add_argument("--ticket", help="ticket this worker is for; the model "
-                                           "requested on it overrides --profile")
+    dispatch.add_argument(
+        "--agent-profile", metavar="NAME",
+        help="launch-time agent name from the live `agent-profiles` command",
+    )
+    dispatch.add_argument(
+        "--llm-profile", "--profile", dest="llm_profile", metavar="NAME",
+        help="LLM name from `llm-profiles`; --profile is the legacy alias",
+    )
+    dispatch.add_argument("--ticket", help="ticket this worker is for; its explicit "
+                                           "LLM profile overrides either profile option")
     dispatch.add_argument("--role", default="worker", choices=["worker", "manager"])
     dispatch.add_argument("--no-worktree", action="store_true",
                           help="run in the checkout instead of an isolation worktree")
@@ -171,12 +197,23 @@ def build_parser() -> argparse.ArgumentParser:
     followup.add_argument("conversation_id")
     followup.add_argument("--prompt")
     followup.add_argument("--prompt-file")
-    followup.add_argument("--profile", help="switch the conversation to this profile")
-    followup.add_argument("--ticket", help="ticket this conversation is for; the model "
-                                           "requested on it overrides --profile")
+    followup.add_argument(
+        "--agent-profile", metavar="NAME",
+        help="launch-only; rejected for existing conversations",
+    )
+    followup.add_argument(
+        "--llm-profile", "--profile", dest="llm_profile", metavar="NAME",
+        help="switch the existing conversation's LLM; --profile is the legacy alias",
+    )
+    followup.add_argument("--ticket", help="ticket this conversation is for; its explicit "
+                                           "LLM profile overrides --llm-profile")
     followup.set_defaults(func=cmd_followup)
 
-    sub.add_parser("profiles", help="list LLM profiles").set_defaults(func=cmd_profiles)
+    sub.add_parser("agent-profiles", help="list launch-time agent profiles").set_defaults(
+        func=cmd_agent_profiles)
+    sub.add_parser("llm-profiles", help="list LLM profiles").set_defaults(func=cmd_llm_profiles)
+    sub.add_parser("profiles", help="legacy alias for llm-profiles").set_defaults(
+        func=cmd_llm_profiles)
 
     conv = sub.add_parser("conversation", help="inspect a conversation")
     conv.add_argument("conversation_id")

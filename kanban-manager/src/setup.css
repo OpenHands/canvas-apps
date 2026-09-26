@@ -89,3 +89,8 @@
 .vibe-ext .mgr-stop:hover { color: var(--danger); background: var(--ghost-bg-hover); }
 .vibe-ext .mgr-stop[hidden] { display: none; }
 .vibe-ext .mgr-stop.working { opacity: .55; pointer-events: none; }
+
+.vibe-ext.backend-loading {
+  padding: var(--s6) var(--s5);
+  min-height: 12rem;
+}
